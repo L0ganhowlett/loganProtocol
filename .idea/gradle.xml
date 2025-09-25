@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GradleMigrationSettings" migrationVersion="1" />
+  <component name="GradleSettings">
+    <option name="linkedExternalProjectsSettings">
+      <GradleProjectSettings>
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="gradleHome" value="" />
+        <option name="modules">
+          <set>
+            <option value="$PROJECT_DIR$" />
+            <option value="$PROJECT_DIR$/audit-service" />
+            <option value="$PROJECT_DIR$/authz-service" />
+            <option value="$PROJECT_DIR$/kernel-service" />
+            <option value="$PROJECT_DIR$/memory-service" />
+            <option value="$PROJECT_DIR$/shared" />
+            <option value="$PROJECT_DIR$/tool-adapters" />
+            <option value="$PROJECT_DIR$/tool-adapters/shell-adapter" />
+          </set>
+        </option>
+      </GradleProjectSettings>
+      <GradleProjectSettings>
+        <option name="externalProjectPath" value="$PROJECT_DIR$/kernel-service" />
+        <option name="gradleHome" value="" />
+      </GradleProjectSettings>
+      <GradleProjectSettings>
+        <option name="externalProjectPath" value="$PROJECT_DIR$/shared" />
+        <option name="gradleHome" value="" />
+      </GradleProjectSettings>
+    </option>
+  </component>
+</project>

@@ -1,0 +1,22 @@
+version: "3.9"
+services:
+  redis:
+    image: redis:7
+    container_name: agentic-redis
+    ports:
+      - "6379:6379"
+
+  mysql:
+    image: mysql:8.4.0
+    container_name: agentic-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: agentdb
+      MYSQL_USER: agent
+      MYSQL_PASSWORD: agentpass
+      TZ: Asia/Kolkata
+    ports:
+      - "3307:3306"
+    volumes:
+      - ./mysql-data:/var/lib/mysql
