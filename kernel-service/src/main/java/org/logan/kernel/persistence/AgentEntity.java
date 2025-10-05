@@ -1,6 +1,5 @@
 package org.logan.kernel.persistence;
 
-
 import jakarta.persistence.*;
 import java.time.Instant;
 
@@ -14,11 +13,14 @@ public class AgentEntity {
     @Column(name = "agent_type", nullable = false)
     private String agentType;
 
-    @Column(name = "state", columnDefinition = "jsonb")
+    @Column(name = "state", columnDefinition = "json")
     private String state;
 
     @Column(name = "status", nullable = false)
     private String status; // ACTIVE, TERMINATED
+
+    @Column(name = "endpoint")
+    private String endpoint; // <-- NEW: where the agent is reachable (e.g., http://localhost:9001)
 
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;
@@ -50,6 +52,9 @@ public class AgentEntity {
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+
+    public String getEndpoint() { return endpoint; }
+    public void setEndpoint(String endpoint) { this.endpoint = endpoint; }
 
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

@@ -24,10 +24,13 @@ public class AgentRegistry {
         } catch (Exception e) {
             System.out.println("⚠️ agent.onStart failed for " + agent.getId() + ": " + e.getMessage());
         }
-        if (persistence != null) {
-            persistence.upsertActive(agent.getId(), agent.getType(), null); // null state for now
-        }
-        System.out.println("🟢 Registered agent: " + agent.getId());
+        persistence.upsertActive(
+                agent.getId(),
+                agent.getType(),
+                null,                 // state placeholder
+                agent.getEndpoint()
+        );
+        System.out.println("🟢 Registered agent: " + agent.getId() + " at " + agent.getEndpoint());
     }
 
     public void deregisterAgent(String agentId) {
@@ -38,10 +41,10 @@ public class AgentRegistry {
             } catch (Exception e) {
                 System.out.println("⚠️ agent.onStop failed for " + agentId + ": " + e.getMessage());
             }
-            if (persistence != null) persistence.markTerminated(agentId);
+            persistence.markTerminated(agentId);
             System.out.println("🔴 Deregistered agent: " + agentId);
         } else {
-            System.out.println("⚠️ Attempted to deregister non-existent agent: " + agentId);
+            System.out.println("⚠️ Tried to deregister non-existent agent: " + agentId);
         }
     }
 

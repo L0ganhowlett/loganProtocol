@@ -18,8 +18,18 @@ public class EchoAgent implements Agent {
     public String getType() { return type; }
 
     @Override
+    public String getEndpoint() {
+        return "";
+    }
+
+    @Override
     public void handleMessage(MessageEnvelope<?> envelope) {
         System.out.println("🤖 [" + id + "] received: " + envelope.getPayload());
+    }
+
+    @Override
+    public void onStart() {
+        Agent.super.onStart();
     }
 
     @Override

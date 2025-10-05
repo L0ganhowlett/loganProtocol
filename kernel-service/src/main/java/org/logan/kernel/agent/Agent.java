@@ -4,18 +4,11 @@ import org.logan.protocol.MessageEnvelope;
 
 public interface Agent {
     String getId();
-
     String getType();
+    String getEndpoint();  // ✅ required so persistence/registry can use it
 
     void handleMessage(MessageEnvelope<?> envelope);
 
-    /**
-     * Called when the agent is registered and ready.
-     */
     default void onStart() {}
-
-    /**
-     * Called when the agent is being terminated - do cleanup here.
-     */
     default void onStop() {}
 }

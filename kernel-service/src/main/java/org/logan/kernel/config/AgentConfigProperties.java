@@ -22,11 +22,15 @@ public class AgentConfigProperties {
     public static class AgentDefinition {
         private String id;
         private String type;
+        private String endpoint; // NEW
 
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }
 
         public String getType() { return type; }
         public void setType(String type) { this.type = type; }
+
+        public String getEndpoint() { return endpoint; }
+        public void setEndpoint(String endpoint) { this.endpoint = endpoint; }
     }
 }

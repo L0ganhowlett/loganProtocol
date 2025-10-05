@@ -15,23 +15,22 @@ public class AgentPersistenceService {
     }
 
     @Transactional
-    public void upsertActive(String agentId, String agentType, String stateJson) {
+    public void upsertActive(String agentId, String agentType, String stateJson, String endpoint) {
         AgentEntity entity = repo.findById(agentId).orElseGet(AgentEntity::new);
         entity.setAgentId(agentId);
         entity.setAgentType(agentType);
         entity.setState(stateJson);
         entity.setStatus("ACTIVE");
+        entity.setEndpoint(endpoint); // ✅ persist endpoint
         repo.save(entity);
     }
 
     @Transactional
     public void markTerminated(String agentId) {
-        Optional<AgentEntity> o = repo.findById(agentId);
-        if (o.isPresent()) {
-            AgentEntity e = o.get();
+        repo.findById(agentId).ifPresent(e -> {
             e.setStatus("TERMINATED");
             repo.save(e);
-        }
+        });
     }
 
     public List<AgentEntity> loadActive() {

@@ -28,6 +28,8 @@ dependencies {
 
     implementation("com.theokanning.openai-gpt3-java:service:0.18.2") // Java OpenAI client
     implementation("com.fasterxml.jackson.core:jackson-databind")
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
+
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
