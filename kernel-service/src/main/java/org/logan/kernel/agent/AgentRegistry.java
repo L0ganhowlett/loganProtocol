@@ -27,7 +27,7 @@ public class AgentRegistry {
         persistence.upsertActive(
                 agent.getId(),
                 agent.getType(),
-                null,                 // state placeholder
+                null,
                 agent.getEndpoint()
         );
         System.out.println("🟢 Registered agent: " + agent.getId() + " at " + agent.getEndpoint());
@@ -50,6 +50,10 @@ public class AgentRegistry {
 
     public Agent getAgent(String agentId) {
         return agents.get(agentId);
+    }
+
+    public boolean hasAgent(String agentId) {
+        return agents.containsKey(agentId);
     }
 
     public void routeMessage(MessageEnvelope<?> envelope) {

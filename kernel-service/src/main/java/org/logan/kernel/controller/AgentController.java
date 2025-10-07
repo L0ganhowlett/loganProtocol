@@ -22,7 +22,7 @@ public class AgentController {
         this.registry = registry;
     }
 
-    // POST /agents -> spawn a new agent
+    // POST /agents -> spawn a new agent (existing)
     @PostMapping
     public ResponseEntity<?> createAgent(@RequestBody Map<String,String> body) {
         String type = body.get("type");
@@ -30,47 +30,34 @@ public class AgentController {
         if (type == null) {
             return ResponseEntity.badRequest().body(Map.of("ok", false, "message", "type required"));
         }
-
         try {
             Agent agent = factory.createAgent(id, type);
-            return ResponseEntity.ok(Map.of(
-                    "ok", true,
-                    "agentId", agent.getId(),
-                    "endpoint", agent.getEndpoint()
-            ));
-        } catch (Exception ex) {
-            return ResponseEntity.status(500).body(Map.of("ok", false, "message", ex.getMessage()));
+            return ResponseEntity.ok(Map.of("ok", true, "agentId", agent.getId(), "endpoint", agent.getEndpoint()));
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError().body(Map.of("ok", false, "error", e.getMessage()));
         }
     }
 
-    // DELETE /agents/{id} -> terminate an agent
-    @DeleteMapping("/{agentId}")
-    public ResponseEntity<?> deleteAgent(@PathVariable String agentId) {
+    // NEW: spawn orchestrator (id defaults to orchestrator-agent)
+    @PostMapping("/spawn-orchestrator")
+    public ResponseEntity<?> spawnOrchestrator(@RequestBody(required = false) Map<String,String> body) {
+        String id = body == null ? null : body.getOrDefault("id", "orchestrator-agent");
+        String type = "BEDROCK";
         try {
-            registry.deregisterAgent(agentId);
-            return ResponseEntity.ok(Map.of("ok", true));
-        } catch (Exception ex) {
-            return ResponseEntity.status(500).body(Map.of("ok", false, "message", ex.getMessage()));
+            Agent agent = factory.createAgent(id, type);
+            // Optionally call onStart - AgentFactory should have started process and AgentRegistry should have it registered
+            return ResponseEntity.ok(Map.of("ok", true, "agentId", agent.getId(), "endpoint", agent.getEndpoint()));
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError().body(Map.of("ok", false, "error", e.getMessage()));
         }
     }
 
-    // GET /agents/{id} -> metadata for one agent
-    @GetMapping("/{agentId}")
-    public ResponseEntity<?> getAgent(@PathVariable String agentId) {
-        var agent = registry.getAgent(agentId);
-        if (agent == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(Map.of(
-                "agentId", agent.getId(),
-                "type", agent.getType(),
-                "endpoint", agent.getEndpoint()
-        ));
-    }
-
-    // ✅ NEW: GET /agents -> list all live agents
-    // ✅ NEW: GET /agents -> list all live agents
+    // GET /agents -> list (existing)
     @GetMapping
     public ResponseEntity<?> listAgents() {
-        List<Map<String, Object>> agents = registry.listAgentIds().stream()
+        List<Map<String,Object>> agents = registry.listAgentIds().stream()
                 .map(id -> {
                     Agent agent = registry.getAgent(id);
                     return Map.<String, Object>of(

@@ -72,13 +72,17 @@ public class BedrockActions {
             List<Message> conversation,
             List<ToolSpecification> toolSpecs
     ) {
-        ToolConfiguration configuration = ToolConfiguration.builder()
-                .tools(toolSpecs.stream().map(t -> Tool.builder().toolSpec(t).build()).toList())
-                .build();
-
         ConverseRequest.Builder requestBuilder = ConverseRequest.builder()
-                .modelId(modelId)
-                .toolConfig(configuration);
+                .modelId(modelId);
+
+
+        if (toolSpecs != null && !toolSpecs.isEmpty()) {
+            ToolConfiguration configuration = ToolConfiguration.builder()
+                    .tools(toolSpecs.stream().map(t -> Tool.builder().toolSpec(t).build()).toList())
+                    .build();
+            requestBuilder.toolConfig(configuration);
+        }
+
 
 
         // ✅ Nova: system prompt as first message

@@ -160,6 +160,7 @@ public class ChatController {
                     String toolName = useBlock.name();
                     Map<String, Document> inputData = useBlock.input().asMap();
 
+                    // 🧾 Local audit + send to kernel
                     chatAudit.computeIfAbsent(sessionId, k -> new ArrayList<>())
                             .add(Map.of(
                                     "timestamp", new Date().toString(),
@@ -168,6 +169,7 @@ public class ChatController {
                                     "input", inputData,
                                     "agentId", agentId
                             ));
+                    sendToolEventToKernel(sessionId, agentId, "tool_invocation", toolName, Map.of("input", inputData));
 
                     ToolResponse toolResponse = invokeTool(useBlock);
 
@@ -178,6 +180,7 @@ public class ChatController {
                             "output", toolResponse.getContent(),
                             "agentId", agentId
                     ));
+                    sendToolEventToKernel(sessionId, agentId, "tool_result", toolName, Map.of("output", toolResponse.getContent()));
 
                     ToolResultContentBlock resultBlock = ToolResultContentBlock.builder()
                             .json(toolResponse.getContent())
@@ -266,7 +269,7 @@ public class ChatController {
                     ));
 
             MessageEnvelope<Map<String, Object>> envelope = new MessageEnvelope<>();
-            envelope.setSenderId(agentId); // ✅ dynamically passed
+            envelope.setSenderId(agentId);
             envelope.setRecipientId("kernel");
             envelope.setType("agent_status_update");
             envelope.setPayload(Map.of(
@@ -282,6 +285,28 @@ public class ChatController {
         }
     }
 
+    // 🧰 New helper — sends tool_invocation/tool_result events to kernel
+    private void sendToolEventToKernel(String sessionId, String agentId, String type, String toolName, Map<String, Object> payloadData) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("sessionId", sessionId);
+            payload.put("agentId", agentId);
+            payload.put("tool", toolName);
+            payload.putAll(payloadData);
+
+            MessageEnvelope<Map<String, Object>> env = new MessageEnvelope<>();
+            env.setSenderId(agentId);
+            env.setRecipientId("kernel");
+            env.setType(type);
+            env.setPayload(payload);
+
+            restTemplate.postForEntity(kernelBaseUrl + "/messages", env, Void.class);
+            System.out.printf("🧰 [%s] Sent %s for tool=%s session=%s%n", agentId, type, toolName, sessionId);
+        } catch (Exception e) {
+            System.err.printf("⚠️ [%s] Failed to send %s: %s%n", agentId, type, e.getMessage());
+        }
+    }
+
     private static class ToolResponse {
         private String toolUseId;
         private Document content;
@@ -292,6 +317,4 @@ public class ChatController {
         public Document getContent() { return content; }
         public void setContent(Document content) { this.content = content; }
     }
-
-
 }
