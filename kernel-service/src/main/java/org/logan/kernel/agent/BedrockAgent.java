@@ -179,22 +179,25 @@ public class BedrockAgent implements Agent {
             sendReasoningUpdate(sessionId, "planner", "Discovered agent tools: " + agentTools);
             System.out.printf("🧩 [orchestrator] Discovered agent tools: %s%n", agentTools);
 
+            // 🆕 Improved to forbid markdown fences and force pure JSON
             String planningPrompt = """
-                You are an AI orchestrator responsible for planning multi-agent workflows.
-                Given the user's goal and the available agents with their tools,
-                decide which agents should be called and in what order.
-                
-                Respond strictly as JSON:
-                {
-                    "plan": [
-                        {"agent": "agent-id", "action": "Describe step"},
-                        {"agent": "agent-id-2", "action": "Describe next step"}
-                    ]
-                }
-
-                User goal: %s
-                Available agents and tools: %s
+            You are an AI orchestrator responsible for planning multi-agent workflows.
+            Given the user's goal and the available agents with their tools,
+            decide which agents should be called and in what order.
+        
+            Respond ONLY with valid JSON. Do not use markdown or triple backticks.
+            The response must be parsable directly as JSON:
+            {
+                "plan": [
+                    {"agent": "agent-id", "action": "Describe step"},
+                    {"agent": "agent-id-2", "action": "Describe next step"}
+                ]
+            }
+        
+            User goal: %s
+            Available agents and tools: %s
             """.formatted(message, agentTools);
+
 
             List<Map<String, Object>> plan = askModelForPlan(planningPrompt);
             sendReasoningUpdate(sessionId, "planner", "Generated plan: " + plan);
@@ -324,13 +327,42 @@ public class BedrockAgent implements Agent {
                     .build();
 
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-            Map<String,Object> parsed = objectMapper.readValue(resp.body(), Map.class);
-            return (List<Map<String, Object>>) parsed.getOrDefault("plan", List.of());
+            String body = resp.body();
+
+            // 🆕 1️⃣ Clean Bedrock/Nova LLM responses that include markdown fences
+            String cleaned = body.trim();
+            if (cleaned.startsWith("```")) {
+                cleaned = cleaned.replaceAll("(?s)```json|```", "").trim();
+            }
+
+            // 🆕 2️⃣ Log cleaned content for debugging
+            System.out.printf("🧩 [planner] Raw model response (cleaned): %s%n", cleaned);
+
+            // 🆕 3️⃣ Try to parse the cleaned JSON safely
+            Map<String, Object> parsed = new HashMap<>();
+            try {
+                parsed = objectMapper.readValue(cleaned, Map.class);
+            } catch (Exception inner) {
+                System.err.printf("⚠️ [planner] JSON parsing failed, returning raw text. Cause: %s%n", inner.getMessage());
+                parsed.put("raw", cleaned);
+                parsed.put("error", "Could not parse JSON plan, returning raw text.");
+            }
+
+            // 🆕 4️⃣ Extract plan if present
+            Object planObj = parsed.get("plan");
+            if (planObj instanceof List<?> list) {
+                return (List<Map<String, Object>>) list;
+            } else {
+                System.err.println("⚠️ [planner] 'plan' field missing or not a list — returning empty plan.");
+                return List.of();
+            }
+
         } catch (Exception e) {
-            System.err.printf("⚠️ Plan generation failed: %s%n", e.getMessage());
+            System.err.printf("❌ [planner] Plan generation failed: %s%n", e.getMessage());
             return List.of();
         }
     }
+
 
     public void registerAgentToKernel(String targetAgent, String sessionId, String message) {
         try {

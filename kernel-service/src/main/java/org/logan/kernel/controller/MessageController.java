@@ -1,9 +1,11 @@
 package org.logan.kernel.controller;
 
+import jakarta.annotation.PostConstruct;
 import org.logan.kernel.agent.AgentRegistry;
 import org.logan.protocol.MessageEnvelope;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -15,26 +17,67 @@ public class MessageController {
     private final AgentRegistry registry;
     private final ConcurrentHashMap<String, PendingSession> pendingSessions = new ConcurrentHashMap<>();
     private final Map<String, Map<String, CompletableFuture<Map<String, Object>>>> agentWaiters = new ConcurrentHashMap<>();
+    private final Map<String, SseEmitter> activeEmitters = new ConcurrentHashMap<>();
 
-    private static final ExecutorService MSG_EXECUTOR = Executors.newCachedThreadPool(); // 🧵 Non-blocking async pool
+    private static final ExecutorService MSG_EXECUTOR = Executors.newCachedThreadPool();
     private static final long WAIT_SECONDS = 60L;
 
     public MessageController(AgentRegistry registry) {
         this.registry = registry;
     }
 
+    // --- SSE Stream Endpoint ---
+    @GetMapping("/stream")
+    public SseEmitter streamEvents() {
+        SseEmitter emitter = new SseEmitter(0L);
+        String emitterId = UUID.randomUUID().toString();
+        activeEmitters.put(emitterId, emitter);
+
+        System.out.println("🔌 Client connected to /messages/stream: " + emitterId);
+
+        emitter.onCompletion(() -> {
+            activeEmitters.remove(emitterId);
+            System.out.println("✅ SSE completed: " + emitterId);
+        });
+        emitter.onTimeout(() -> {
+            activeEmitters.remove(emitterId);
+            emitter.complete();
+            System.out.println("⚠️ SSE timeout: " + emitterId);
+        });
+        emitter.onError((e) -> {
+            System.err.println("❌ SSE error: " + e.getMessage());
+            activeEmitters.remove(emitterId);
+        });
+
+        return emitter;
+    }
+
+    // --- Periodic Heartbeat ---
+    @PostConstruct
+    public void startSseHeartbeat() {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(() -> {
+            Map<String, Object> heartbeat = Map.of(
+                    "timestamp", new Date().toString(),
+                    "type", "heartbeat",
+                    "message", "Orchestrator is listening"
+            );
+            broadcastSse(heartbeat);
+        }, 60, 60, TimeUnit.SECONDS);
+    }
+
+    // --- Handle Incoming Messages ---
     @PostMapping
     public ResponseEntity<?> postMessage(@RequestBody MessageEnvelope<?> envelope) {
         try {
             System.out.printf("📩 Message received: from=%s → to=%s type=%s%n",
                     envelope.getSenderId(), envelope.getRecipientId(), envelope.getType());
 
-            String type = envelope.getType() == null ? "" : envelope.getType().toLowerCase();
+            String type = (envelope.getType() == null ? "" : envelope.getType().toLowerCase());
             Map<String, Object> payload = (Map<String, Object>) envelope.getPayload();
 
             switch (type) {
-
-                // 🧠 Agent reasoning or model thoughts
+                // 🧠 Reasoning
                 case "agent_status_update" -> {
                     String sessionId = extractSessionId(payload);
                     String agentId = (String) payload.getOrDefault("agentId", envelope.getSenderId());
@@ -46,9 +89,9 @@ public class MessageController {
                     event.put("phase", payload.get("phase"));
                     event.put("message", payload.get("message"));
                     event.put("agentId", agentId);
-
                     ps.addEvent(event);
                     ps.addAudit(event);
+                    broadcastSse(event);
 
                     System.out.printf("🧠 [%s] Reasoning (%s) logged for session=%s%n",
                             agentId, payload.get("phase"), sessionId);
@@ -60,6 +103,7 @@ public class MessageController {
                     ));
                 }
 
+                // 📋 Register agent plan
                 case "register_agent_plan" -> {
                     String targetAgent = (String) payload.get("targetAgent");
                     String sessionId = (String) payload.get("sessionId");
@@ -69,18 +113,21 @@ public class MessageController {
                         return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "Missing targetAgent"));
 
                     PendingSession ps = pendingSessions.computeIfAbsent(sessionId, k -> new PendingSession());
-                    ps.registerAgent(targetAgent); // 🔹 pre-register for tracking
-
-                    System.out.printf("📋 Registered %s in session=%s by %s%n", targetAgent, sessionId, fromAgent);
-                    return ResponseEntity.ok(Map.of(
-                            "ok", true,
-                            "status", "agent_registered",
+                    ps.registerAgent(targetAgent);
+                    Map<String, Object> event = Map.of(
+                            "timestamp", new Date().toString(),
+                            "type", "register_agent_plan",
+                            "fromAgent", fromAgent,
                             "targetAgent", targetAgent,
                             "sessionId", sessionId
-                    ));
+                    );
+//                    broadcastSse(event);
+
+                    System.out.printf("📋 Registered %s in session=%s%n", targetAgent, sessionId);
+                    return ResponseEntity.ok(Map.of("ok", true));
                 }
 
-                // 🤝 Delegation (orchestrator → other agents)
+                // 🤝 Delegation
                 case "delegation" -> {
                     String targetAgent = (String) payload.get("targetAgent");
                     String sessionId = (String) payload.get("sessionId");
@@ -92,31 +139,27 @@ public class MessageController {
 
                     PendingSession ps = pendingSessions.computeIfAbsent(sessionId, k -> new PendingSession());
                     ps.registerAgent(targetAgent);
-                    ps.addAudit(Map.of(
+
+                    Map<String, Object> event = Map.of(
                             "timestamp", new Date().toString(),
                             "type", "delegation",
                             "agentId", fromAgent,
                             "targetAgent", targetAgent,
-                            "message", msg
-                    ));
-
-                    System.out.printf("🤝 Delegation %s → %s (session=%s)%n", fromAgent, targetAgent, sessionId);
-
-                    // 🧵 Run routing asynchronously (non-blocking)
-                    MessageEnvelope<Map<String, Object>> delegatedChat = new MessageEnvelope<>();
-                    delegatedChat.setSenderId(fromAgent);
-                    delegatedChat.setRecipientId(targetAgent);
-                    delegatedChat.setType("chat");
-                    delegatedChat.setPayload(Map.of("sessionId", sessionId, "message", msg));
+                            "message", msg,
+                            "sessionId", sessionId
+                    );
+                    ps.addAudit(event);
+                    broadcastSse(event);
 
                     MSG_EXECUTOR.submit(() -> {
                         try {
                             if (registry.hasAgent(targetAgent)) {
+                                MessageEnvelope<Map<String, Object>> delegatedChat = new MessageEnvelope<>();
+                                delegatedChat.setSenderId(fromAgent);
+                                delegatedChat.setRecipientId(targetAgent);
+                                delegatedChat.setType("chat");
+                                delegatedChat.setPayload(Map.of("sessionId", sessionId, "message", msg));
                                 registry.routeMessage(delegatedChat);
-                                System.out.printf("🚀 [async] Delegation dispatched: %s → %s (session=%s)%n",
-                                        fromAgent, targetAgent, sessionId);
-                            } else {
-                                System.err.printf("⚠️ Target agent not found: %s%n", targetAgent);
                             }
                         } catch (Exception e) {
                             System.err.printf("❌ [async] Delegation failed for %s → %s: %s%n",
@@ -132,24 +175,25 @@ public class MessageController {
                     ));
                 }
 
-                // 🧰 Tool invocation/result
+                // 🧰 Tool events
                 case "tool_invocation", "tool_result" -> {
                     String sessionId = extractSessionId(payload);
                     String agentId = (String) payload.getOrDefault("agentId", envelope.getSenderId());
                     PendingSession ps = pendingSessions.computeIfAbsent(sessionId, k -> new PendingSession());
 
-                    Map<String, Object> auditEvent = new LinkedHashMap<>(payload);
-                    auditEvent.put("timestamp", new Date().toString());
-                    auditEvent.put("type", type);
-                    auditEvent.put("agentId", agentId);
+                    Map<String, Object> event = new LinkedHashMap<>(payload);
+                    event.put("timestamp", new Date().toString());
+                    event.put("type", type);
+                    event.put("agentId", agentId);
+                    event.put("message","Executing tool: "+payload.get("tool"));
+                    ps.addAudit(event);
+//                    broadcastSse(event);
 
-                    ps.addAudit(auditEvent);
-                    System.out.printf("🧰 [%s] %s captured for session=%s%n", agentId, type, sessionId);
-
-                    return ResponseEntity.ok(Map.of("ok", true, "status", type + "_recorded"));
+                    System.out.printf("🧰 [%s] %s recorded for session=%s%n", agentId, type, sessionId);
+                    return ResponseEntity.ok(Map.of("ok", true));
                 }
 
-                // 💬 User → Orchestrator chat entry
+                // 💬 User chat
                 case "chat" -> {
                     String sessionId = extractSessionId(payload);
                     PendingSession ps = new PendingSession();
@@ -157,12 +201,15 @@ public class MessageController {
 
                     String sender = envelope.getSenderId() != null ? envelope.getSenderId() : "user";
 
-                    ps.addAudit(Map.of(
+                    Map<String, Object> event = Map.of(
                             "timestamp", new Date().toString(),
                             "type", "user_input",
                             "agentId", sender,
-                            "message", payload.get("message")
-                    ));
+                            "message", payload.get("message"),
+                            "sessionId", sessionId
+                    );
+                    ps.addAudit(event);
+                    broadcastSse(event);
 
                     registry.routeMessage(envelope);
                     System.out.printf("💬 Waiting for chat_result (session=%s, timeout=%ds)%n", sessionId, WAIT_SECONDS);
@@ -183,7 +230,7 @@ public class MessageController {
                     return ResponseEntity.ok(result);
                 }
 
-                // 🏁 Agent finished execution
+                // 🏁 Chat results
                 case "chat_result" -> {
                     String sessionId = extractSessionId(payload);
                     String agentId = (String) payload.getOrDefault("agentId", envelope.getSenderId());
@@ -229,8 +276,19 @@ public class MessageController {
                             "timestamp", new Date().toString(),
                             "type", "chat_result",
                             "agentId", agentId,
-                            "status", "completed"
+                            "status", "completed",
+                            "sessionId", sessionId
                     ));
+                    broadcastSse(Map.of(
+                            "timestamp", new Date().toString(),
+                            "type", "chat_result",
+                            "agentId", agentId,
+                            "status", "completed",
+                            "sessionId", sessionId,
+                            "message", String.format("✅ [%s] Completed session=%s (agents left=%d)",
+                                    agentId, sessionId, ps.getRemainingAgents().size())
+                    ));
+
 
                     System.out.printf("✅ [%s] Completed session=%s (agents left=%d)%n",
                             agentId, sessionId, ps.getRemainingAgents().size());
@@ -241,11 +299,12 @@ public class MessageController {
                         Map<String, Object> aggregated = new LinkedHashMap<>();
                         aggregated.put("ok", true);
                         aggregated.put("sessionId", sessionId);
-                        aggregated.put("events", ps.getEvents());
+                        aggregated.put("message", ps.getEvents());
                         aggregated.put("audit", ps.getAudit());
                         aggregated.put("completedAgents", ps.getCompletedAgents());
                         aggregated.put("result", payload);
                         ps.complete(aggregated);
+                        broadcastSse(aggregated);
                         System.out.printf("🏁 Orchestrator finalized session=%s%n", sessionId);
                     }
 
@@ -270,7 +329,7 @@ public class MessageController {
         }
     }
 
-    // 🧩 Orchestrator → Kernel waiter registration
+    // --- Waiter registration ---
     @PostMapping("/register-waiter")
     public ResponseEntity<?> registerWaiter(@RequestBody Map<String, Object> payload) {
         try {
@@ -291,6 +350,21 @@ public class MessageController {
         }
     }
 
+    // --- SSE Broadcast ---
+    private void broadcastSse(Map<String, Object> event) {
+        List<String> dead = new ArrayList<>();
+        activeEmitters.forEach((id, emitter) -> {
+            try {
+                emitter.send(SseEmitter.event().name("message").data(event));
+            } catch (Exception e) {
+                System.out.println("⚠️ [SSE] Removing dead emitter: " + id);
+                dead.add(id);
+            }
+        });
+        dead.forEach(activeEmitters::remove);
+    }
+
+    // --- Utility Methods ---
     private String extractSessionId(Map<String, Object> payload) {
         if (payload == null) return "default-session";
         Object sid = payload.get("sessionId");
@@ -312,7 +386,7 @@ public class MessageController {
                 .ifPresent(fut -> fut.complete(result));
     }
 
-    // --- Multi-Agent session tracking ---
+    // --- Pending Session Inner Class ---
     private static class PendingSession {
         private final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
         private final List<Map<String, Object>> events = Collections.synchronizedList(new ArrayList<>());
@@ -335,7 +409,6 @@ public class MessageController {
 
         public Set<String> getRemainingAgents() { return new HashSet<>(activeAgents); }
         public Set<String> getCompletedAgents() { return new HashSet<>(completedAgents); }
-
         public void addEvent(Map<String, Object> event) { events.add(event); }
         public void addAudit(Map<String, Object> event) { audit.add(event); }
 
