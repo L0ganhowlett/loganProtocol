@@ -3,7 +3,12 @@ package org.logan.controller;
 import org.logan.DynamicTool;
 import org.logan.ToolRegistry;
 import org.logan.dto.ToolRequest;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestTemplate;
 import software.amazon.awssdk.core.document.Document;
 
 import java.util.*;
@@ -14,9 +19,11 @@ import java.util.stream.Collectors;
 public class ToolController {
 
     private final ToolRegistry toolRegistry;
+    private final RestTemplate rest;
 
-    public ToolController(ToolRegistry toolRegistry) {
+    public ToolController(ToolRegistry toolRegistry, RestTemplate rest) {
         this.toolRegistry = toolRegistry;
+        this.rest = rest;
         System.out.println("ToolController registry hash: " + System.identityHashCode(toolRegistry));
     }
 
@@ -25,23 +32,67 @@ public class ToolController {
     // ------------------------
     @PostMapping("/register")
     public String registerTool(@RequestBody ToolRequest request) {
-        // ✅ Convert incoming schema into Document recursively
+        // ✅ Convert incoming schema into AWS Document recursively
         Document schema = convertToDocument(request.getSchema());
 
+        // 🔍 Identify the consumer’s Eureka service name
+        String consumerService = request.getConsumerService();
+        System.out.printf("📥 Registering tool '%s' for consumer service: %s%n",
+                request.getName(), consumerService);
+
+        // 🔧 Create a DynamicTool that delegates execution to consumer service via Eureka
         DynamicTool tool = new DynamicTool(
                 request.getName(),
                 request.getDescription(),
                 schema,
                 input -> {
-                    System.out.println("▶ Tool invoked: " + request.getName() + " with input: " + input);
-                    // Echo minimal result
-                    return Document.fromMap(Map.of("status", Document.fromString("ok")));
+                    try {
+                        // Prepare input payload for consumer service
+                        Map<String, Object> execRequest = Map.of(
+                                "tool", request.getName(),
+                                "input", input.entrySet().stream()
+                                        .collect(Collectors.toMap(
+                                                Map.Entry::getKey,
+                                                e -> documentToPlainMap(e.getValue())
+                                        ))
+                        );
+
+                        System.out.printf("🔗 Delegating execution of '%s' to consumer [%s]%n",
+                                request.getName(), consumerService);
+
+                        // ✅ Use Eureka service discovery (RestTemplate is @LoadBalanced)
+                        ResponseEntity<Map> response = rest.postForEntity(
+                                "http://" + consumerService + "/tools/execute",
+                                new HttpEntity<>(execRequest, defaultHeaders()),
+                                Map.class
+                        );
+
+                        Map<String, Object> result = response.getBody();
+                        System.out.printf("✅ Tool '%s' executed successfully by %s, result=%s%n",
+                                request.getName(), consumerService, result);
+
+                        return convertToDocument(result);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        System.err.printf("❌ Failed to invoke tool '%s' via %s: %s%n",
+                                request.getName(), consumerService, e.getMessage());
+                        return convertToDocument(Map.of(
+                                "ok", false,
+                                "error", e.getMessage(),
+                                "consumerService", consumerService
+                        ));
+                    }
                 }
         );
 
+        // ✅ Register the tool into this agent’s registry
         toolRegistry.register(tool);
-        return "✅ Tool registered: " + tool.getName();
+        System.out.printf("✅ Tool '%s' registered and bound to consumer [%s]%n",
+                tool.getName(), consumerService);
+
+        return "✅ Tool registered successfully: " + tool.getName() + " (consumer=" + consumerService + ")";
     }
+
 
     // ------------------------
     // List all tools
@@ -130,5 +181,11 @@ public class ToolController {
             return doc.asBoolean();
         }
         return null;
+    }
+
+    private HttpHeaders defaultHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return headers;
     }
 }

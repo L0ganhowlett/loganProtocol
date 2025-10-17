@@ -18,12 +18,21 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+  application:
+    name: kernel-service
 
-agents:
-  - id: spawner-1
-    type: SPAWNER
-  - id: echo-1
-    type: ECHO
+eureka:
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    should-unregister-on-shutdown: true
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
 
 server:
   port: 8080

@@ -3,6 +3,7 @@ package org.logan.kernel.agent;
 import org.logan.kernel.persistence.AgentPersistenceService;
 import org.springframework.stereotype.Component;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.URI;
@@ -86,8 +87,8 @@ public class AgentFactory {
                 "--server.port=" + port
         );
         System.out.println("🐞 Debug port for " + id + " = " + debugPort);
-        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-        pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+        pb.directory(new File(System.getProperty("user.dir"))); // ✅ ensure relative paths ok
+        pb.inheritIO(); // ✅ stream logs into kernel console
 
         Process process = pb.start();
         BedrockAgent agent = new BedrockAgent(id, assignedEndpoint, process);

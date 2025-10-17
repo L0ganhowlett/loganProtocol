@@ -7,7 +7,7 @@ public class ToolRequest {
     private String description;
     private Map<String, Object> schema;  // JSON Schema structure
     private String type; // e.g., "calculator", "weather" etc.
-
+    private String consumerService;
     // getters + setters
 
     public String getName() {
@@ -40,5 +40,13 @@ public class ToolRequest {
 
     public void setType(String type) {
         this.type = type;
+    }
+
+    public String getConsumerService() {
+        return consumerService;
+    }
+
+    public void setConsumerService(String consumerService) {
+        this.consumerService = consumerService;
     }
 }
