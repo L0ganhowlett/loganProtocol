@@ -102,6 +102,28 @@ public class BedrockAgent implements Agent {
                     }
                     break;
                 }
+                case "user_decision" -> {
+                    Map<String, Object> payload = (Map<String, Object>) envelope.getPayload();
+                    String sessionId = Optional.ofNullable(payload.get("sessionId"))
+                            .map(Object::toString).orElse("default-session");
+                    String choice = Optional.ofNullable(payload.get("choice"))
+                            .map(Object::toString).orElse("skip");
+                    String input = Optional.ofNullable(payload.get("input"))
+                            .map(Object::toString).orElse(null);
+
+                    // complete local waiter for user so orchestration resumes
+                    Map<String, Object> decisionData = new LinkedHashMap<>();
+                    decisionData.put("choice", choice);
+                    if (input != null && !input.isBlank()) {
+                        decisionData.put("input", input);
+                    }
+
+                    completeLocalWaiter(sessionId, "user", decisionData);
+
+                    System.out.printf("🧠 [%s] Received user decision for session=%s → choice=%s input=%s%n",
+                            id, sessionId, choice, input);
+                }
+
                 default ->
                         System.out.printf("⚠️ [%s] Unknown message type: %s%n", id, type);
             }
@@ -179,37 +201,34 @@ public class BedrockAgent implements Agent {
             sendReasoningUpdate(sessionId, "planner", "Discovered agent tools: " + agentTools);
             System.out.printf("🧩 [orchestrator] Discovered agent tools: %s%n", agentTools);
 
-            // 🆕 Improved to forbid markdown fences and force pure JSON
             String planningPrompt = """
-            You are an AI orchestrator responsible for planning multi-agent workflows.
-            Given the user's goal and the available agents with their tools,
-            decide which agents should be called and in what order.
-        
-            Respond ONLY with valid JSON. Do not use markdown or triple backticks.
-            The response must be parsable directly as JSON:
-            {
-                "plan": [
-                    {"agent": "agent-id", "action": "Describe step"},
-                    {"agent": "agent-id-2", "action": "Describe next step"}
-                ]
-            }
-        
-            User goal: %s
-            Available agents and tools: %s
-            """.formatted(message, agentTools);
+        You are an AI orchestrator responsible for planning multi-agent workflows.
+        Given the user's goal and the available agents with their tools,
+        decide which agents should be called and in what order.
 
+        Respond ONLY with valid JSON. Do not use markdown or triple backticks.
+        The response must be parsable directly as JSON:
+        {
+            "plan": [
+                {"agent": "agent-id", "action": "Describe step"},
+                {"agent": "agent-id-2", "action": "Describe next step"}
+            ]
+        }
+
+        User goal: %s
+        Available agents and tools: %s
+        """.formatted(message, agentTools);
 
             List<Map<String, Object>> plan = askModelForPlan(planningPrompt);
             sendReasoningUpdate(sessionId, "planner", "Generated plan: " + plan);
 
-            // Execute each agent sequentially
+            // 🔁 Execute each agent in sequence
             for (Map<String, Object> step : plan) {
                 String agent = (String) step.get("agent");
                 String action = (String) step.get("action");
                 if (agent == null || action == null) continue;
 
-                sendReasoningUpdate(sessionId, "delegation",
-                        "Delegating to " + agent + " → " + action);
+                sendReasoningUpdate(sessionId, "delegation", "Delegating to " + agent + " → " + action);
 
                 CompletableFuture<Map<String, Object>> waiter = new CompletableFuture<>();
                 registerLocalWaiter(sessionId, agent, waiter);
@@ -219,9 +238,128 @@ public class BedrockAgent implements Agent {
                 System.out.printf("🤝 [%s] Delegated session=%s → %s%n", id, sessionId, agent);
 
                 try {
-                    // ⏳ Wait indefinitely for result (sequential)
+                    // Wait for agent to respond
                     Map<String, Object> agentResult = waiter.get();
 
+                    // 🧩 Extract human-readable message for reasoning
+                    String agentMessage = null;
+
+                    // 1️⃣ Prefer top-level message
+                    if (agentResult.containsKey("message")) {
+                        agentMessage = Objects.toString(agentResult.get("message"), "");
+                    }
+
+                    // 2️⃣ Fallback: flatten audit messages
+                    if ((agentMessage == null || agentMessage.isBlank()) && agentResult.containsKey("audit")) {
+                        Object auditObj = agentResult.get("audit");
+                        if (auditObj instanceof List<?> auditList) {
+                            StringBuilder sb = new StringBuilder();
+                            for (Object o : auditList) {
+                                if (o instanceof Map<?, ?> m && m.containsKey("message")) {
+                                    sb.append(m.get("message")).append(" | ");
+                                }
+                            }
+                            agentMessage = sb.toString().trim();
+                            if (agentMessage.endsWith("|")) {
+                                agentMessage = agentMessage.substring(0, agentMessage.length() - 1);
+                            }
+                        }
+                    }
+
+                    // 3️⃣ Fallback if still empty
+                    if (agentMessage == null || agentMessage.isBlank()) {
+                        agentMessage = "Agent " + agent + " completed without explicit message.";
+                    }
+
+                    System.out.printf("🧠 Extracted agent message for reasoning: %s%n", agentMessage);
+
+                    // 4️⃣ Analyze with reasoner
+                    Map<String, Object> reasonAnalysis = askModelForReason(agent, agentMessage);
+
+                    boolean needsUserInput = Boolean.TRUE.equals(reasonAnalysis.get("needsUserInput"));
+                    boolean toolFailed = Boolean.TRUE.equals(reasonAnalysis.get("toolFailed"));
+                    String reason = Optional.ofNullable(reasonAnalysis.get("reason"))
+                            .map(Object::toString)
+                            .orElse("Detected issue");
+
+                    // ✅ Always enforce same 4 options here too
+                    List<String> options = List.of("provide_input", "skip", "abort", "retry");
+
+                    // 5️⃣ Pause orchestration if user action is needed
+                    if (needsUserInput || toolFailed) {
+                        sendReasoningUpdate(sessionId, "orchestration_pause", "⏸ " + reason + " for " + agent);
+
+                        // 🧩 Send orchestrator_wait event to kernel/UI
+                        Map<String, Object> waitPayload = Map.of(
+                                "type", "orchestrator_wait",
+                                "sessionId", sessionId,
+                                "agentId", agent,
+                                "reason", reason,
+                                "message", agentMessage,
+                                "options", options
+                        );
+
+                        MessageEnvelope<Map<String, Object>> waitEvent = new MessageEnvelope<>();
+                        waitEvent.setSenderId(this.id);
+                        waitEvent.setRecipientId("kernel");
+                        waitEvent.setType("orchestrator_wait");
+                        waitEvent.setPayload(waitPayload);
+                        sendToKernel(waitEvent);
+
+                        // 🔁 Wait for user decision
+                        CompletableFuture<Map<String, Object>> userDecision = new CompletableFuture<>();
+                        registerLocalWaiter(sessionId, "user", userDecision);
+                        registerWaiterWithKernel(sessionId, "user", userDecision);
+
+                        Map<String, Object> decision = userDecision.get();
+                        String choice = ((String) decision.getOrDefault("choice", "skip")).toLowerCase();
+
+                        switch (choice) {
+                            case "abort" -> {
+                                sendReasoningUpdate(sessionId, "orchestration_abort", "🛑 User aborted orchestration");
+                                return;
+                            }
+                            case "retry" -> {
+                                sendReasoningUpdate(sessionId, "orchestration_retry", "🔁 Retrying " + agent);
+                                delegateToAgent(agent, sessionId, action);
+                                waiter = new CompletableFuture<>();
+                                registerLocalWaiter(sessionId, agent, waiter);
+                                registerWaiterWithKernel(sessionId, agent, waiter);
+                                agentResult = waiter.get();
+                            }
+                            case "provide_input" -> {
+                                String userInput = (String) decision.getOrDefault("input", "");
+                                sendReasoningUpdate(sessionId, "orchestration_resume_input",
+                                        "💡 Received user input for " + agent + ": " + userInput);
+
+                                // 🧩 Re-delegate with user input included
+                                Map<String, Object> newPayload = Map.of(
+                                        "targetAgent", agent,
+                                        "sessionId", sessionId,
+                                        "message", action + " (user input: " + userInput + ")",
+                                        "fromAgent", this.id
+                                );
+                                MessageEnvelope<Map<String, Object>> newDelegation = new MessageEnvelope<>();
+                                newDelegation.setSenderId(this.id);
+                                newDelegation.setRecipientId("kernel");
+                                newDelegation.setType("delegation");
+                                newDelegation.setPayload(newPayload);
+                                sendToKernel(newDelegation);
+
+                                // Wait for completion
+                                waiter = new CompletableFuture<>();
+                                registerLocalWaiter(sessionId, agent, waiter);
+                                registerWaiterWithKernel(sessionId, agent, waiter);
+                                agentResult = waiter.get();
+                            }
+                            default -> {
+                                sendReasoningUpdate(sessionId, "orchestration_skip", "⏭ Skipping " + agent);
+                            }
+                        }
+
+                    }
+
+                    // ✅ Finalize step
                     if (agentResult == null || agentResult.isEmpty()) {
                         sendReasoningUpdate(sessionId, "orchestration_step_warning",
                                 "⚠️ " + agent + " returned empty result — continuing");
@@ -233,7 +371,6 @@ public class BedrockAgent implements Agent {
                 } catch (Exception e) {
                     sendReasoningUpdate(sessionId, "orchestration_step_failed",
                             "❌ " + agent + " failed due to " + e.getMessage() + " — continuing");
-                    continue;
                 }
             }
 
@@ -255,6 +392,7 @@ public class BedrockAgent implements Agent {
             e.printStackTrace();
         }
     }
+
 
     private void sendReasoningUpdate(String sessionId, String phase, String message) {
         try {
@@ -363,6 +501,114 @@ public class BedrockAgent implements Agent {
         }
     }
 
+    /**
+     * 🧠 askModelForReason — Ask the model to reason about an agent's message
+     * Determines if the agent output indicates:
+     *   - a need for user input (needsUserInput = true)
+     *   - a tool or process failure (toolFailed = true)
+     * Returns clean structured JSON, same as askModelForPlan.
+     */
+    private Map<String, Object> askModelForReason(String agent, String agentMessage) {
+        try {
+            String reasoningPrompt = """
+        You are an AI orchestration reasoning assistant.
+        Given an agent's last message, analyze whether it indicates a failure
+        or is asking for user input. Return a structured JSON decision.
+
+        Respond ONLY with valid JSON (no markdown). The format must be parsable directly:
+        {
+            "needsUserInput": true | false,
+            "toolFailed": true | false,
+            "reason": "<short readable reason>",
+            "options": ["provide_input","skip","abort","retry"]
+        }
+
+        Criteria:
+        - needsUserInput: true if the agent requests missing information, parameters, or clarification from the user.
+        - toolFailed: true if the agent reports an error, exception, or tool failure.
+        - reason: a brief one-line summary.
+        - options: must always include exactly ["provide_input","skip","abort","retry"].
+
+        Agent ID: %s
+        Message: %s
+        """.formatted(agent, agentMessage == null ? "" : agentMessage);
+
+            String url = endpoint + "/chat/planner"; // same endpoint as plan
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .timeout(Duration.ofSeconds(20))
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                            objectMapper.writeValueAsString(Map.of("message", reasoningPrompt))
+                    ))
+                    .build();
+
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            String body = resp.body();
+
+            // 🧹 Clean up markdown fences if LLM adds them
+            String cleaned = body == null ? "" : body.trim();
+            if (cleaned.startsWith("```")) {
+                cleaned = cleaned.replaceAll("(?s)```json|```", "").trim();
+            }
+
+            System.out.printf("🧩 [reasoner] Raw model response (cleaned): %s%n", cleaned);
+
+            // 🧮 Parse JSON safely
+            Map<String, Object> parsed = new HashMap<>();
+            try {
+                parsed = objectMapper.readValue(cleaned, Map.class);
+            } catch (Exception inner) {
+                System.err.printf("⚠️ [reasoner] JSON parsing failed, fallback to heuristic. Cause: %s%n", inner.getMessage());
+                parsed.put("raw", cleaned);
+                parsed.put("error", "Could not parse JSON reasoning output.");
+            }
+
+            // 🧠 Enforce defaults if fields are missing or malformed
+            String msg = agentMessage == null ? "" : agentMessage.toLowerCase();
+            boolean needsUserInput = parsed.containsKey("needsUserInput")
+                    ? Boolean.TRUE.equals(parsed.get("needsUserInput"))
+                    : (msg.contains("please provide") || msg.contains("missing") || msg.contains("need"));
+            boolean toolFailed = parsed.containsKey("toolFailed")
+                    ? Boolean.TRUE.equals(parsed.get("toolFailed"))
+                    : (msg.contains("failed") || msg.contains("error") || msg.contains("exception"));
+            String reason = Optional.ofNullable(parsed.get("reason"))
+                    .map(Object::toString)
+                    .orElseGet(() -> {
+                        if (needsUserInput) return "Agent requested additional input";
+                        if (toolFailed) return "Agent reported a failure";
+                        return "Normal agent response";
+                    });
+
+            // ✅ Always enforce same 4 options
+            parsed.put("needsUserInput", needsUserInput);
+            parsed.put("toolFailed", toolFailed);
+            parsed.put("reason", reason);
+            parsed.put("options", List.of("provide_input", "skip", "abort", "retry"));
+
+            return parsed;
+
+        } catch (Exception e) {
+            System.err.printf("❌ [reasoner] Reasoning model call failed: %s%n", e.getMessage());
+
+            // Fallback if anything breaks
+            String msg = agentMessage == null ? "" : agentMessage.toLowerCase();
+            boolean needsUserInput = msg.contains("please provide") || msg.contains("missing") || msg.contains("need");
+            boolean toolFailed = msg.contains("failed") || msg.contains("error") || msg.contains("exception");
+
+            return Map.of(
+                    "needsUserInput", needsUserInput,
+                    "toolFailed", toolFailed,
+                    "reason", needsUserInput
+                            ? "User input required"
+                            : (toolFailed ? "Agent process failed" : "Normal agent message"),
+                    // ✅ Always same 4 options
+                    "options", List.of("provide_input", "skip", "abort", "retry")
+            );
+        }
+    }
+
+
 
     public void registerAgentToKernel(String targetAgent, String sessionId, String message) {
         try {
@@ -423,7 +669,7 @@ public class BedrockAgent implements Agent {
             String type = message.getType() != null ? message.getType().toLowerCase() : "";
             boolean isCritical =
                     type.equals("register_waiter") ||
-                            type.equals("agent_status_update");
+                            type.equals("agent_status_update") || type.equals("orchestrator_wait");
 
             if (isCritical) {
                 HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());

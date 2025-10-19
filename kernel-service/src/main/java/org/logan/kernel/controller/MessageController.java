@@ -187,7 +187,7 @@ public class MessageController {
                     event.put("agentId", agentId);
                     event.put("message","Executing tool: "+payload.get("tool"));
                     ps.addAudit(event);
-//                    broadcastSse(event);
+//                  broadcastSse(event);
 
                     System.out.printf("🧰 [%s] %s recorded for session=%s%n", agentId, type, sessionId);
                     return ResponseEntity.ok(Map.of("ok", true));
@@ -316,6 +316,39 @@ public class MessageController {
                     ));
                 }
 
+                case "orchestrator_wait" -> {
+                    String sessionId = extractSessionId(payload);
+                    String agentId = (String) payload.getOrDefault("agentId", "orchestrator-agent");
+                    String reason = (String) payload.getOrDefault("reason", "No reason provided");
+                    String message = (String) payload.getOrDefault("message", "");
+                    List<String> options = (List<String>) payload.getOrDefault(
+                            "options", List.of("retry", "skip", "abort"));
+
+                    PendingSession ps = pendingSessions.computeIfAbsent(sessionId, k -> new PendingSession());
+
+                    Map<String, Object> event = new LinkedHashMap<>();
+                    event.put("timestamp", new Date().toString());
+                    event.put("type", "orchestrator_wait");
+                    event.put("sessionId", sessionId);
+                    event.put("agentId", agentId);
+                    event.put("reason", reason);
+                    event.put("message", message);
+                    event.put("options", options);
+                    ps.addAudit(event);
+
+                    // 🔊 Notify all connected UIs
+                    broadcastSse(event);
+
+                    System.out.printf("⏸ [kernel] Orchestrator paused for session=%s (agent=%s, reason=%s)%n",
+                            sessionId, agentId, reason);
+
+                    return ResponseEntity.ok(Map.of(
+                            "ok", true,
+                            "status", "orchestrator_wait_broadcasted",
+                            "sessionId", sessionId
+                    ));
+                }
+
                 default -> {
                     registry.routeMessage(envelope);
                     return ResponseEntity.ok(Map.of("ok", true, "type", type));
@@ -349,6 +382,64 @@ public class MessageController {
             return ResponseEntity.internalServerError().body(Map.of("ok", false, "error", e.getMessage()));
         }
     }
+
+    @PostMapping("/user-decision")
+    public ResponseEntity<?> userDecision(@RequestBody Map<String, Object> payload) {
+        String sessionId = (String) payload.get("sessionId");
+        String choice = (String) payload.get("choice");
+        String input = (String) payload.getOrDefault("input", null);
+
+        if (sessionId == null || choice == null) {
+            return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "Missing sessionId or choice"));
+        }
+
+        // 1️⃣ Complete kernel-side waiter for 'user'
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("choice", choice);
+        if (input != null) result.put("input", input);
+        completeAgentWaiter(sessionId, "user", result);
+
+        // 2️⃣ Notify all connected UI clients
+        Map<String, Object> sseEvent = new LinkedHashMap<>();
+        sseEvent.put("timestamp", new Date().toString());
+        sseEvent.put("type", "user_decision");
+        sseEvent.put("sessionId", sessionId);
+        sseEvent.put("choice", choice);
+        if (input != null) sseEvent.put("input", input);
+        broadcastSse(sseEvent);
+
+        // 3️⃣ Route the decision back to orchestrator-agent (mirror chat_result behavior)
+        try {
+            MessageEnvelope<Map<String, Object>> orchestratorMsg = new MessageEnvelope<>();
+            orchestratorMsg.setSenderId("user");
+            orchestratorMsg.setRecipientId("orchestrator-agent");
+            orchestratorMsg.setType("user_decision");
+
+            // 🧩 Include sessionId in the routed payload
+            Map<String, Object> orchestratorPayload = new LinkedHashMap<>(result);
+            orchestratorPayload.put("sessionId", sessionId);
+
+            orchestratorMsg.setPayload(orchestratorPayload);
+
+            if (registry.hasAgent("orchestrator-agent")) {
+                registry.routeMessage(orchestratorMsg);
+                System.out.printf("🔁 Routed user decision → orchestrator-agent (session=%s, choice=%s)%n",
+                        sessionId, choice);
+            } else {
+                System.err.println("⚠️ orchestrator-agent not found in registry");
+            }
+        } catch (Exception e) {
+            System.err.printf("⚠️ Failed routing user decision to orchestrator-agent: %s%n", e.getMessage());
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "ok", true,
+                "status", "user_decision_routed",
+                "sessionId", sessionId,
+                "choice", choice
+        ));
+    }
+
 
     // --- SSE Broadcast ---
     private void broadcastSse(Map<String, Object> event) {
