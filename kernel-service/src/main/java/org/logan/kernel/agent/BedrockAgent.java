@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.logan.protocol.MessageEnvelope;
 
+import java.io.File;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -17,12 +18,10 @@ import java.util.stream.Collectors;
 /**
  * 🧩 BedrockAgent: kernel-side representation of a Bedrock agent process.
  *
- * Features:
- *  - Generic chat forwarding for normal agents
- *  - Orchestrator mode (id = orchestrator-agent): plans multi-agent workflows via LLM
- *  - Delegation protocol: kernel routes tasks between agents
- *  - Async communication with kernel
- *  - Emits reasoning events to kernel for unified timeline
+ * Event-driven orchestration (non-blocking)
+ *  ✅ Uses waiter-based flow (no while-loops)
+ *  ✅ Supports user input, retry, skip
+ *  ✅ Can persist orchestration state between restarts
  */
 public class BedrockAgent implements Agent {
     private static final ScheduledExecutorService SCHED = Executors.newSingleThreadScheduledExecutor();
@@ -35,6 +34,11 @@ public class BedrockAgent implements Agent {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final Map<String, CompletableFuture<Map<String, Object>>> localWaiters = new ConcurrentHashMap<>();
+
+    // 🆕 Persistent session orchestration state
+    private final Map<String, List<Map<String, Object>>> sessionPlans = new ConcurrentHashMap<>();
+    private final Map<String, Integer> sessionStepIndex = new ConcurrentHashMap<>();
+    private final Map<String, String> sessionPausedAgent = new ConcurrentHashMap<>();
 
     private static String waiterKey(String sessionId, String agentId) {
         return sessionId + "::" + agentId;
@@ -50,6 +54,8 @@ public class BedrockAgent implements Agent {
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        // 🆕 Load persisted orchestration state (if exists)
+        loadSessionState();
     }
 
     @Override
@@ -71,14 +77,29 @@ public class BedrockAgent implements Agent {
 
             switch (type) {
                 case "chat" -> {
-                    if ("orchestrator-agent".equalsIgnoreCase(this.id)) {
-                        handleOrchestratorChat(envelope);
+                    Map<String, Object> payload = (Map<String, Object>) envelope.getPayload();
+                    String sessionId = (String) payload.getOrDefault("sessionId", UUID.randomUUID().toString());
+                    String message = (String) payload.get("message");
+
+                    // 🆕 Check if there’s a paused session
+                    if ("orchestrator-agent".equalsIgnoreCase(this.id)
+                            && sessionPlans.containsKey(sessionId)
+                            && sessionStepIndex.containsKey(sessionId)) {
+
+                        System.out.printf("🔁 [%s] Resuming paused orchestration for session=%s with message=%s%n",
+                                id, sessionId, message);
+
+                        resumePausedSession(sessionId, message);
                     } else {
-                        handleChat(envelope);
+                        // Normal new orchestration
+                        if ("orchestrator-agent".equalsIgnoreCase(this.id)) {
+                            handleOrchestratorChat(envelope);
+                        } else {
+                            handleChat(envelope);
+                        }
                     }
+                    break;
                 }
-                case "tool_request" ->
-                        System.out.printf("🧰 [%s] tool_request forwarded: %s%n", id, envelope.getPayload());
                 case "chat_result" -> {
                     if ("orchestrator-agent".equalsIgnoreCase(this.id)) {
                         Map<String, Object> payload = (Map<String, Object>) envelope.getPayload();
@@ -88,9 +109,9 @@ public class BedrockAgent implements Agent {
                                 .map(Object::toString).orElse(envelope.getSenderId());
 
                         completeLocalWaiter(sessionId, agentId, payload);
+                        // 🆕 Trigger reasoning and next step
+                        handleAgentResult(sessionId, agentId, payload);
 
-                        System.out.printf("✅ [%s] (orchestrator) Received chat_result from %s for session=%s — waiter completed%n",
-                                id, agentId, sessionId);
                     } else {
                         MessageEnvelope<Object> out = new MessageEnvelope<>();
                         out.setSenderId(this.id);
@@ -106,24 +127,15 @@ public class BedrockAgent implements Agent {
                     Map<String, Object> payload = (Map<String, Object>) envelope.getPayload();
                     String sessionId = Optional.ofNullable(payload.get("sessionId"))
                             .map(Object::toString).orElse("default-session");
-                    String choice = Optional.ofNullable(payload.get("choice"))
-                            .map(Object::toString).orElse("skip");
-                    String input = Optional.ofNullable(payload.get("input"))
-                            .map(Object::toString).orElse(null);
-
-                    // complete local waiter for user so orchestration resumes
-                    Map<String, Object> decisionData = new LinkedHashMap<>();
-                    decisionData.put("choice", choice);
-                    if (input != null && !input.isBlank()) {
-                        decisionData.put("input", input);
+                    String agent = (String) payload.get("agentId");
+                    if (agent == null || agent.equalsIgnoreCase("unknown")) {
+                        agent = sessionPausedAgent.get(sessionId);
                     }
 
-                    completeLocalWaiter(sessionId, "user", decisionData);
-
-                    System.out.printf("🧠 [%s] Received user decision for session=%s → choice=%s input=%s%n",
-                            id, sessionId, choice, input);
+                    String action = (String) payload.getOrDefault("action", "");
+                    handleUserDecision(sessionId, agent, action, payload);
+                    break;
                 }
-
                 default ->
                         System.out.printf("⚠️ [%s] Unknown message type: %s%n", id, type);
             }
@@ -134,9 +146,7 @@ public class BedrockAgent implements Agent {
         }
     }
 
-    /**
-     * 🔹 Standard agent chat flow
-     */
+    // 🔹 Standard agent chat flow (unchanged)
     private void handleChat(MessageEnvelope<?> envelope) {
         try {
             Map<String, Object> payload = (Map<String, Object>) envelope.getPayload();
@@ -183,213 +193,232 @@ public class BedrockAgent implements Agent {
         }
     }
 
-    /**
-     * 🔹 Orchestrator mode — executes agents in strict sequence
-     */
+    // 🔄 Replaced blocking orchestrator with event-driven orchestration
     private void handleOrchestratorChat(MessageEnvelope<?> envelope) {
         try {
+
             Map<String, Object> payload = (Map<String, Object>) envelope.getPayload();
             String sessionId = (String) payload.getOrDefault("sessionId", UUID.randomUUID().toString());
             String message = (String) payload.get("message");
             if (message == null || message.isEmpty()) return;
-
-            sendReasoningUpdate(sessionId, "thinking",
-                    "<thinking>Planning how to achieve: " + message + "</thinking>");
+            sendReasoningUpdate(sessionId, "thinking", "<thinking>Planning how to achieve: " + message + "</thinking>");
             System.out.printf("🧭 [orchestrator] Planning generically for session=%s%n", sessionId);
 
             Map<String, List<String>> agentTools = discoverAllAgentTools();
             sendReasoningUpdate(sessionId, "planner", "Discovered agent tools: " + agentTools);
-            System.out.printf("🧩 [orchestrator] Discovered agent tools: %s%n", agentTools);
 
             String planningPrompt = """
-        You are an AI orchestrator responsible for planning multi-agent workflows.
-        Given the user's goal and the available agents with their tools,
-        decide which agents should be called and in what order.
+            You are an AI orchestrator responsible for planning multi-agent workflows.
+            Given the user's goal and the available agents with their tools,
+            decide which agents should be called and in what order.
 
-        Respond ONLY with valid JSON. Do not use markdown or triple backticks.
-        The response must be parsable directly as JSON:
-        {
-            "plan": [
-                {"agent": "agent-id", "action": "Describe step"},
-                {"agent": "agent-id-2", "action": "Describe next step"}
-            ]
-        }
+            Respond ONLY with valid JSON (no markdown):
+            { "plan": [ {"agent":"agent-id","action":"Describe step"} ] }
 
-        User goal: %s
-        Available agents and tools: %s
-        """.formatted(message, agentTools);
+            User goal: %s
+            Available agents and tools: %s
+            """.formatted(message, agentTools);
 
             List<Map<String, Object>> plan = askModelForPlan(planningPrompt);
             sendReasoningUpdate(sessionId, "planner", "Generated plan: " + plan);
 
-            // 🔁 Execute each agent in sequence
-            for (Map<String, Object> step : plan) {
-                String agent = (String) step.get("agent");
-                String action = (String) step.get("action");
-                if (agent == null || action == null) continue;
+            // 🆕 Save session plan
+            sessionPlans.put(sessionId, plan);
+            sessionStepIndex.put(sessionId, 0);
+            persistSessionState();
 
-                sendReasoningUpdate(sessionId, "delegation", "Delegating to " + agent + " → " + action);
+            // 🆕 Begin orchestration
+            continuePlan(sessionId);
+
+        } catch (Exception e) {
+            System.err.printf("❌ [orchestrator] failed: %s%n", e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // 🆕 Move to the next agent step
+    private void continuePlan(String sessionId) {
+        List<Map<String, Object>> plan = sessionPlans.get(sessionId);
+        int index = sessionStepIndex.getOrDefault(sessionId, 0);
+
+        if (plan == null || index >= plan.size()) {
+            sendReasoningUpdate(sessionId, "summary", "✅ All delegations completed.");
+            sessionPlans.remove(sessionId);
+            sessionStepIndex.remove(sessionId);
+            persistSessionState();
+            return;
+        }
+
+        Map<String, Object> step = plan.get(index);
+        String agent = (String) step.get("agent");
+        String action = (String) step.get("action");
+
+        sendReasoningUpdate(sessionId, "delegation", "Delegating to " + agent + " → " + action);
+
+        CompletableFuture<Map<String, Object>> waiter = new CompletableFuture<>();
+        registerLocalWaiter(sessionId, agent, waiter);
+        registerWaiterWithKernel(sessionId, agent, waiter);
+
+        delegateToAgent(agent, sessionId, action);
+        System.out.printf("🤝 [%s] Delegated session=%s → %s%n", id, sessionId, agent);
+    }
+
+    // 🆕 Triggered when agent completes
+    private void handleAgentResult(String sessionId, String agent, Map<String, Object> result) {
+        try {
+            String message = extractAgentMessage(result);
+            Map<String, Object> reason = askModelForReason(agent, message);
+
+            boolean needsUserInput = Boolean.TRUE.equals(reason.get("needsUserInput"));
+            boolean toolFailed = Boolean.TRUE.equals(reason.get("toolFailed"));
+            String reasonText = Optional.ofNullable(reason.get("reason"))
+                    .map(Object::toString)
+                    .orElse("Detected issue");
+
+            if (needsUserInput || toolFailed) {
+                String pausedAgent = sessionPausedAgent.get(sessionId);
+
+                // 🔹 If session not currently paused, or paused for a different agent → pause now
+                if (pausedAgent == null || !pausedAgent.equals(agent)) {
+                    sessionPausedAgent.put(sessionId, agent);
+                    sendReasoningUpdate(sessionId, "orchestration_pause",
+                            "⏸ " + reasonText + " for " + agent);
+
+                    Map<String, Object> waitPayload = Map.of(
+                            "type", "orchestrator_wait",
+                            "sessionId", sessionId,
+                            "agentId", agent,
+                            "reason", reasonText,
+                            "message", message,
+                            "options", List.of("provide_input", "skip", "abort", "retry")
+                    );
+
+                    MessageEnvelope<Map<String, Object>> waitEvent = new MessageEnvelope<>();
+                    waitEvent.setSenderId(this.id);
+                    waitEvent.setRecipientId("kernel");
+                    waitEvent.setType("orchestrator_wait");
+                    waitEvent.setPayload(waitPayload);
+                    sendToKernel(waitEvent);
+
+                    System.out.printf("⏸ [%s] Paused session=%s for agent=%s%n", id, sessionId, agent);
+                    return;
+                }
+
+                // 🔁 If already paused for this agent → just refresh reasoning
+                sendReasoningUpdate(sessionId, "orchestration_pause_update",
+                        "🔁 Updated reasoning for " + agent + ": " + reasonText);
+                System.out.printf("⚠️ [%s] Already paused for agent=%s — reasoning refreshed%n", id, agent);
+                return;
+            }
+
+            // ✅ Success → clear pause and move next
+            sendReasoningUpdate(sessionId, "orchestration_step_complete",
+                    "✅ " + agent + " completed successfully.");
+
+            sessionPausedAgent.remove(sessionId);
+            int next = sessionStepIndex.getOrDefault(sessionId, 0) + 1;
+            sessionStepIndex.put(sessionId, next);
+            persistSessionState();
+            continuePlan(sessionId);
+
+        } catch (Exception e) {
+            sendReasoningUpdate(sessionId, "orchestration_step_failed",
+                    "❌ " + agent + " failed: " + e.getMessage());
+        }
+    }
+
+    // 🆕 Handle user decision inputs
+    private void handleUserDecision(String sessionId, String agent, String action, Map<String, Object> decision) {
+        String choice = ((String) decision.getOrDefault("choice", "skip")).toLowerCase();
+
+        switch (choice) {
+            case "abort" -> sendReasoningUpdate(sessionId, "orchestration_abort", "🛑 User aborted orchestration");
+
+            case "retry" -> {
+                sendReasoningUpdate(sessionId, "orchestration_retry", "🔁 Retrying " + agent);
+                // ✅ Clear paused state before retry
+                sessionPausedAgent.remove(sessionId);
+
+                CompletableFuture<Map<String, Object>> waiter = new CompletableFuture<>();
+                registerLocalWaiter(sessionId, agent, waiter);
+                registerWaiterWithKernel(sessionId, agent, waiter);
+                delegateToAgent(agent, sessionId, action);
+            }
+
+            case "provide_input" -> {
+                String input = (String) decision.getOrDefault("input", "");
+                sendReasoningUpdate(sessionId, "orchestration_resume_input",
+                        "💡 Received user input for " + agent + ": " + input);
+
+                // ✅ Clear paused state before resuming
+                sessionPausedAgent.remove(sessionId);
 
                 CompletableFuture<Map<String, Object>> waiter = new CompletableFuture<>();
                 registerLocalWaiter(sessionId, agent, waiter);
                 registerWaiterWithKernel(sessionId, agent, waiter);
 
-                delegateToAgent(agent, sessionId, action);
-                System.out.printf("🤝 [%s] Delegated session=%s → %s%n", id, sessionId, agent);
-
-                try {
-                    // Wait for agent to respond
-                    Map<String, Object> agentResult = waiter.get();
-
-                    // 🧩 Extract human-readable message for reasoning
-                    String agentMessage = null;
-
-                    // 1️⃣ Prefer top-level message
-                    if (agentResult.containsKey("message")) {
-                        agentMessage = Objects.toString(agentResult.get("message"), "");
-                    }
-
-                    // 2️⃣ Fallback: flatten audit messages
-                    if ((agentMessage == null || agentMessage.isBlank()) && agentResult.containsKey("audit")) {
-                        Object auditObj = agentResult.get("audit");
-                        if (auditObj instanceof List<?> auditList) {
-                            StringBuilder sb = new StringBuilder();
-                            for (Object o : auditList) {
-                                if (o instanceof Map<?, ?> m && m.containsKey("message")) {
-                                    sb.append(m.get("message")).append(" | ");
-                                }
-                            }
-                            agentMessage = sb.toString().trim();
-                            if (agentMessage.endsWith("|")) {
-                                agentMessage = agentMessage.substring(0, agentMessage.length() - 1);
-                            }
-                        }
-                    }
-
-                    // 3️⃣ Fallback if still empty
-                    if (agentMessage == null || agentMessage.isBlank()) {
-                        agentMessage = "Agent " + agent + " completed without explicit message.";
-                    }
-
-                    System.out.printf("🧠 Extracted agent message for reasoning: %s%n", agentMessage);
-
-                    // 4️⃣ Analyze with reasoner
-                    Map<String, Object> reasonAnalysis = askModelForReason(agent, agentMessage);
-
-                    boolean needsUserInput = Boolean.TRUE.equals(reasonAnalysis.get("needsUserInput"));
-                    boolean toolFailed = Boolean.TRUE.equals(reasonAnalysis.get("toolFailed"));
-                    String reason = Optional.ofNullable(reasonAnalysis.get("reason"))
-                            .map(Object::toString)
-                            .orElse("Detected issue");
-
-                    // ✅ Always enforce same 4 options here too
-                    List<String> options = List.of("provide_input", "skip", "abort", "retry");
-
-                    // 5️⃣ Pause orchestration if user action is needed
-                    if (needsUserInput || toolFailed) {
-                        sendReasoningUpdate(sessionId, "orchestration_pause", "⏸ " + reason + " for " + agent);
-
-                        // 🧩 Send orchestrator_wait event to kernel/UI
-                        Map<String, Object> waitPayload = Map.of(
-                                "type", "orchestrator_wait",
-                                "sessionId", sessionId,
-                                "agentId", agent,
-                                "reason", reason,
-                                "message", agentMessage,
-                                "options", options
-                        );
-
-                        MessageEnvelope<Map<String, Object>> waitEvent = new MessageEnvelope<>();
-                        waitEvent.setSenderId(this.id);
-                        waitEvent.setRecipientId("kernel");
-                        waitEvent.setType("orchestrator_wait");
-                        waitEvent.setPayload(waitPayload);
-                        sendToKernel(waitEvent);
-
-                        // 🔁 Wait for user decision
-                        CompletableFuture<Map<String, Object>> userDecision = new CompletableFuture<>();
-                        registerLocalWaiter(sessionId, "user", userDecision);
-                        registerWaiterWithKernel(sessionId, "user", userDecision);
-
-                        Map<String, Object> decision = userDecision.get();
-                        String choice = ((String) decision.getOrDefault("choice", "skip")).toLowerCase();
-
-                        switch (choice) {
-                            case "abort" -> {
-                                sendReasoningUpdate(sessionId, "orchestration_abort", "🛑 User aborted orchestration");
-                                return;
-                            }
-                            case "retry" -> {
-                                sendReasoningUpdate(sessionId, "orchestration_retry", "🔁 Retrying " + agent);
-                                delegateToAgent(agent, sessionId, action);
-                                waiter = new CompletableFuture<>();
-                                registerLocalWaiter(sessionId, agent, waiter);
-                                registerWaiterWithKernel(sessionId, agent, waiter);
-                                agentResult = waiter.get();
-                            }
-                            case "provide_input" -> {
-                                String userInput = (String) decision.getOrDefault("input", "");
-                                sendReasoningUpdate(sessionId, "orchestration_resume_input",
-                                        "💡 Received user input for " + agent + ": " + userInput);
-
-                                // 🧩 Re-delegate with user input included
-                                Map<String, Object> newPayload = Map.of(
-                                        "targetAgent", agent,
-                                        "sessionId", sessionId,
-                                        "message", action + " (user input: " + userInput + ")",
-                                        "fromAgent", this.id
-                                );
-                                MessageEnvelope<Map<String, Object>> newDelegation = new MessageEnvelope<>();
-                                newDelegation.setSenderId(this.id);
-                                newDelegation.setRecipientId("kernel");
-                                newDelegation.setType("delegation");
-                                newDelegation.setPayload(newPayload);
-                                sendToKernel(newDelegation);
-
-                                // Wait for completion
-                                waiter = new CompletableFuture<>();
-                                registerLocalWaiter(sessionId, agent, waiter);
-                                registerWaiterWithKernel(sessionId, agent, waiter);
-                                agentResult = waiter.get();
-                            }
-                            default -> {
-                                sendReasoningUpdate(sessionId, "orchestration_skip", "⏭ Skipping " + agent);
-                            }
-                        }
-
-                    }
-
-                    // ✅ Finalize step
-                    if (agentResult == null || agentResult.isEmpty()) {
-                        sendReasoningUpdate(sessionId, "orchestration_step_warning",
-                                "⚠️ " + agent + " returned empty result — continuing");
-                    } else {
-                        sendReasoningUpdate(sessionId, "orchestration_step_complete",
-                                "✅ " + agent + " completed → " + agentResult.getOrDefault("status", "ok"));
-                    }
-
-                } catch (Exception e) {
-                    sendReasoningUpdate(sessionId, "orchestration_step_failed",
-                            "❌ " + agent + " failed due to " + e.getMessage() + " — continuing");
-                }
+                // 🧠 Re-delegate with the user input
+                delegateToAgent(agent, sessionId, action + " (user input: " + input + ")");
             }
 
-            sendReasoningUpdate(sessionId, "summary", "All delegations completed.");
 
-            MessageEnvelope<Object> ack = new MessageEnvelope<>();
-            ack.setSenderId(this.id);
-            ack.setRecipientId(envelope.getSenderId());
-            ack.setType("chat_result");
-            ack.setPayload(Map.of(
-                    "sessionId", sessionId,
-                    "status", "delegations_completed",
-                    "plan", plan
-            ));
-            sendToKernel(ack);
+            default -> {
+                sendReasoningUpdate(sessionId, "orchestration_skip", "⏭ Skipping " + agent);
+                int next = sessionStepIndex.getOrDefault(sessionId, 0) + 1;
+                sessionStepIndex.put(sessionId, next);
+                persistSessionState();
+                continuePlan(sessionId);
+            }
+        }
+    }
 
+    // 🆕 Helper to extract agent readable message
+    private String extractAgentMessage(Map<String, Object> agentResult) {
+        // 🧠 First, check if there’s a top-level message
+        String msg = Objects.toString(agentResult.getOrDefault("message", ""), "");
+        if (!msg.isBlank()) return msg;
+
+        // 🧾 Otherwise, check the audit log and take only the latest message
+        if (agentResult.containsKey("audit")) {
+            Object auditObj = agentResult.get("audit");
+            if (auditObj instanceof List<?> list && !list.isEmpty()) {
+                // 🕐 Get the last element (latest audit entry)
+                Object last = list.get(list.size() - 1);
+                if (last instanceof Map<?, ?> m && m.containsKey("message")) {
+                    return Objects.toString(m.get("message"), "").trim();
+                }
+            }
+        }
+
+        return "No explicit message from agent.";
+    }
+
+
+    // 🆕 Persist orchestration state to disk
+    private synchronized void persistSessionState() {
+        try {
+            Map<String, Object> state = Map.of(
+                    "plans", sessionPlans,
+                    "indexes", sessionStepIndex
+            );
+            objectMapper.writeValue(new File("orchestrator_state.json"), state);
         } catch (Exception e) {
-            System.err.printf("❌ [orchestrator] failed: %s%n", e.getMessage());
-            e.printStackTrace();
+            System.err.printf("⚠️ [%s] Failed to persist state: %s%n", id, e.getMessage());
+        }
+    }
+
+    // 🆕 Load persisted state from disk
+    private synchronized void loadSessionState() {
+        try {
+            File file = new File("orchestrator_state.json");
+            if (!file.exists()) return;
+            Map<String, Object> state = objectMapper.readValue(file, Map.class);
+            sessionPlans.putAll((Map<String, List<Map<String, Object>>>) state.getOrDefault("plans", Map.of()));
+            Map<String, Integer> idx = (Map<String, Integer>) state.getOrDefault("indexes", Map.of());
+            sessionStepIndex.putAll(idx);
+            System.out.println("🔄 [orchestrator] Restored persisted orchestration state");
+        } catch (Exception e) {
+            System.err.printf("⚠️ [%s] Failed to load persisted state: %s%n", id, e.getMessage());
         }
     }
 
@@ -662,27 +691,18 @@ public class BedrockAgent implements Agent {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(kernelUrl))
                     .header("Content-Type", "application/json")
-                    .timeout(Duration.ofSeconds(100))
+                    .timeout(Duration.ofSeconds(20))
                     .POST(HttpRequest.BodyPublishers.ofString(json))
                     .build();
 
             String type = message.getType() != null ? message.getType().toLowerCase() : "";
-            boolean isCritical =
-                    type.equals("register_waiter") ||
-                            type.equals("agent_status_update") || type.equals("orchestrator_wait");
-
-            if (isCritical) {
-                HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-                System.out.printf("📤 [%s] (SYNC) Sent %s to kernel | response=%s%n",
-                        id, type, resp.body());
-            } else {
-                sendAsyncWithRetries(req, type, 1);
-            }
+            sendAsyncWithRetries(req, type, 1);
 
         } catch (Exception e) {
             System.err.printf("❌ [%s] sendToKernel failed: %s%n", id, e.getMessage());
         }
     }
+
 
     @Override
     public void onStart() {
@@ -757,4 +777,34 @@ public class BedrockAgent implements Agent {
             System.out.printf("⚠️ [%s] (local) No waiter found for session=%s agent=%s%n", id, sessionId, agentId);
         }
     }
+
+    // 🆕 Resume a paused orchestration when user provides input manually
+    private void resumePausedSession(String sessionId, String userInput) {
+        try {
+            List<Map<String, Object>> plan = sessionPlans.get(sessionId);
+            int index = sessionStepIndex.getOrDefault(sessionId, 0);
+
+            if (plan == null || index >= plan.size()) {
+                sendReasoningUpdate(sessionId, "summary", "✅ No pending steps to resume.");
+                return;
+            }
+
+            Map<String, Object> currentStep = plan.get(index);
+            String agent = (String) currentStep.get("agent");
+            String action = (String) currentStep.get("action");
+
+            sendReasoningUpdate(sessionId, "orchestration_resume_input",
+                    "💡 User provided input mid-session for " + agent + ": " + userInput);
+
+            CompletableFuture<Map<String, Object>> waiter = new CompletableFuture<>();
+            registerLocalWaiter(sessionId, agent, waiter);
+            registerWaiterWithKernel(sessionId, agent, waiter);
+
+            // 🧠 Re-delegate agent with the user's new input
+            delegateToAgent(agent, sessionId, action + " (user input: " + userInput + ")");
+        } catch (Exception e) {
+            System.err.printf("❌ [%s] Failed to resume paused session: %s%n", id, e.getMessage());
+        }
+    }
+
 }
