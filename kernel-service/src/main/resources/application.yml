@@ -2,13 +2,10 @@ kernel:
   id: kernel-1
 
 spring:
-  redis:
-    host: localhost
-    port: 6379
   datasource:
-    url: jdbc:mysql://127.0.0.1:3307/agentdb
+    url: jdbc:mysql://127.0.0.1:3306/agentdb
     username: agent
-    password: agentpass
+    password: Highflyer@123
   jpa:
     hibernate:
       ddl-auto: validate
@@ -32,6 +29,9 @@ eureka:
     prefer-ip-address: true
     lease-renewal-interval-in-seconds: 10
     lease-expiration-duration-in-seconds: 30
+    ip-address: 172.31.11.231
+    non-secure-port: ${server.port}
+    instance-id: ${spring.application.name}:${server.port}
 
 
 server:

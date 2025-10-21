@@ -60,7 +60,7 @@ public class AgentFactory {
 
         ProcessBuilder pb = new ProcessBuilder(
                 "java", "-jar",
-                "bedrock-agent/build/libs/bedrock-agent-1.0-SNAPSHOT.jar",
+                "/home/ec2-user/Orion/bedrock-agent-1.0-SNAPSHOT.jar",
                 "--server.port=" + port
         );
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
@@ -77,13 +77,12 @@ public class AgentFactory {
     // ✅ Spawn new Bedrock agent
     public Agent createBedrockAgent(String id, String endpoint) throws Exception {
         int port = findFreePort();
-        String assignedEndpoint = (endpoint != null) ? endpoint : "http://localhost:" + port;
+        String assignedEndpoint = (endpoint != null) ? endpoint : "http://172.31.11.231:" + port;
 
         int debugPort = findFreePort(); // utility to pick a free port
         ProcessBuilder pb = new ProcessBuilder(
                 "java",
-                "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:" + debugPort,
-                "-jar", "bedrock-agent/build/libs/bedrock-agent-1.0-SNAPSHOT.jar",
+                "-jar", "/home/ec2-user/Orion/bedrock-agent-1.0-SNAPSHOT.jar",
                 "--server.port=" + port
         );
         System.out.println("🐞 Debug port for " + id + " = " + debugPort);
