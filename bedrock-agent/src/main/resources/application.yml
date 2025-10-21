@@ -1,0 +1,29 @@
+
+kernel:
+  base-url: http://172.31.11.231:8080
+spring:
+  application:
+    name: bedrock-agent
+eureka:
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    should-unregister-on-shutdown: true
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+    ip-address: 172.31.11.231
+
+aws:
+  bedrock:
+    region: ap-south-1
+    credentials:
+      accessKeyId: YOUR_KEY
+      secretAccessKey: YOUR_SECRET_KEY
+    api-key: YOUR_API_KEY
+#logging:
+#  level:
+#    org.springframework.web.client.RestTemplate: TRACE
