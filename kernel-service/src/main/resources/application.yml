@@ -33,6 +33,11 @@ eureka:
     non-secure-port: ${server.port}
     instance-id: ${spring.application.name}:${server.port}
 
-
+aws:
+  bedrock:
+    region: us-east-1   #Change to your actual Bedrock region
+    credentials:
+      accessKeyId: YOUR_AWS_ACCESS_KEY_ID
+      secretAccessKey: YOUR_AWS_SECRET_ACCESS_KEY
 server:
   port: 8080
