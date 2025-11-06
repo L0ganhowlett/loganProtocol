@@ -208,16 +208,26 @@ public class BedrockAgent implements Agent {
             sendReasoningUpdate(sessionId, "planner", "Discovered agent tools: " + agentTools);
 
             String planningPrompt = """
-            You are an AI orchestrator responsible for planning multi-agent workflows.
-            Given the user's goal and the available agents with their tools,
-            decide which agents should be called and in what order.
+    You are an AI orchestrator responsible for planning multi-agent workflows.
+    Your task is to create an execution plan specifying which agents to call and in what order.
 
-            Respond ONLY with valid JSON (no markdown):
-            { "plan": [ {"agent":"agent-id","action":"Describe step"} ] }
+    🔹 Respond STRICTLY with VALID JSON only.
+    🔹 DO NOT include markdown fences (no ```json or ```).
+    🔹 DO NOT include explanations, comments, or text outside the JSON object.
 
-            User goal: %s
-            Available agents and tools: %s
-            """.formatted(message, agentTools);
+    The format MUST be:
+    {
+      "plan": [
+        { "agent": "<agent-id>", "action": "<describe step>" }
+      ]
+    }
+
+    If multiple agents are needed, include each step in the plan list in order.
+
+    User goal: %s
+    Available agents and tools: %s
+    """.formatted(message, agentTools);
+
 
             List<Map<String, Object>> plan = askModelForPlan(planningPrompt);
             sendReasoningUpdate(sessionId, "planner", "Generated plan: " + plan);
@@ -483,44 +493,72 @@ public class BedrockAgent implements Agent {
         return agentTools;
     }
 
+    @SuppressWarnings("unchecked")
     private List<Map<String, Object>> askModelForPlan(String prompt) {
         try {
             String url = endpoint + "/chat/planner";
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
-                    .timeout(Duration.ofSeconds(20))
-                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(Map.of("message", prompt))))
+                    .timeout(Duration.ofSeconds(30))
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                            objectMapper.writeValueAsString(Map.of("message", prompt))
+                    ))
                     .build();
 
             HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
             String body = resp.body();
 
-            // 🆕 1️⃣ Clean Bedrock/Nova LLM responses that include markdown fences
-            String cleaned = body.trim();
-            if (cleaned.startsWith("```")) {
-                cleaned = cleaned.replaceAll("(?s)```json|```", "").trim();
+            // ✅ 1️⃣ Clean Bedrock/Nova LLM responses that include markdown fences
+            String cleaned = (body == null ? "" : body.trim())
+                    // Remove ```json or ``` fences (with any whitespace/newlines)
+                    .replaceAll("(?s)```\\s*json\\s*", "")
+                    .replaceAll("(?s)```", "")
+                    // Remove control characters (e.g. from streaming responses)
+                    .replaceAll("[\\u0000-\\u001F]", "")
+                    .trim();
+
+            // If JSON is embedded inside extra text, try to isolate the {...} section
+            if (!cleaned.startsWith("{") && cleaned.contains("{") && cleaned.contains("}")) {
+                int start = cleaned.indexOf("{");
+                int end = cleaned.lastIndexOf("}");
+                cleaned = cleaned.substring(start, end + 1);
             }
 
-            // 🆕 2️⃣ Log cleaned content for debugging
+            // ✅ 2️⃣ Log cleaned content for debugging
             System.out.printf("🧩 [planner] Raw model response (cleaned): %s%n", cleaned);
 
-            // 🆕 3️⃣ Try to parse the cleaned JSON safely
+            // ✅ 3️⃣ Try to parse the cleaned JSON safely
             Map<String, Object> parsed = new HashMap<>();
             try {
                 parsed = objectMapper.readValue(cleaned, Map.class);
             } catch (Exception inner) {
-                System.err.printf("⚠️ [planner] JSON parsing failed, returning raw text. Cause: %s%n", inner.getMessage());
+                System.err.printf("⚠️ [planner] JSON parsing failed — trying fallback. Cause: %s%n", inner.getMessage());
                 parsed.put("raw", cleaned);
-                parsed.put("error", "Could not parse JSON plan, returning raw text.");
+                parsed.put("error", "Could not parse JSON plan, attempting fallback.");
+
+                // 🩵 Optional fallback: try to re-parse from "raw" if it contains valid JSON
+                if (cleaned.contains("\"raw\"")) {
+                    try {
+                        Map<String, Object> tmp = objectMapper.readValue(cleaned, Map.class);
+                        String raw = (String) tmp.get("raw");
+                        if (raw != null && raw.contains("{") && raw.contains("}")) {
+                            parsed = objectMapper.readValue(raw, Map.class);
+                            System.out.println("🔁 [planner] Successfully parsed JSON from 'raw' field.");
+                        }
+                    } catch (Exception ignored) {
+                        System.err.println("⚠️ [planner] Fallback parse from 'raw' also failed.");
+                    }
+                }
             }
 
-            // 🆕 4️⃣ Extract plan if present
+            // ✅ 4️⃣ Extract plan if present
             Object planObj = parsed.get("plan");
             if (planObj instanceof List<?> list) {
+                System.out.printf("✅ [planner] Extracted plan with %d step(s)%n", list.size());
                 return (List<Map<String, Object>>) list;
             } else {
-                System.err.println("⚠️ [planner] 'plan' field missing or not a list — returning empty plan.");
+                System.err.printf("⚠️ [planner] 'plan' field missing or not a list. Parsed=%s%n", parsed);
                 return List.of();
             }
 
@@ -529,6 +567,7 @@ public class BedrockAgent implements Agent {
             return List.of();
         }
     }
+
 
     /**
      * 🧠 askModelForReason — Ask the model to reason about an agent's message
