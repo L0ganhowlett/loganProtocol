@@ -1,6 +1,9 @@
-kernel:
-  id: kernel-1
 
+kernel:
+  base-url: http://localhost:8080
+spring:
+  application:
+    name: bedrock-agent
 eureka:
   client:
     register-with-eureka: true
@@ -12,15 +15,15 @@ eureka:
     prefer-ip-address: true
     lease-renewal-interval-in-seconds: 10
     lease-expiration-duration-in-seconds: 30
-    ip-address: YOUR_INSTANCE_IP
-    non-secure-port: ${server.port}
-    instance-id: ${spring.application.name}:${server.port}
+    ip-address: YOUR_IP
 
 aws:
   bedrock:
-    region: us-east-1   #Change to your actual Bedrock region
+    region: ap-south-1
     credentials:
-      accessKeyId: YOUR_AWS_ACCESS_KEY_ID
-      secretAccessKey: YOUR_AWS_SECRET_ACCESS_KEY
-server:
-  port: 8080
+      accessKeyId: YOUR_KEY
+      secretAccessKey: YOUR_SECRET_KEY
+    api-key: YOUR_API_KEY
+#logging:
+#  level:
+#    org.springframework.web.client.RestTemplate: TRACE
