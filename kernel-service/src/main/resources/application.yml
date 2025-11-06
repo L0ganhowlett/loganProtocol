@@ -2,11 +2,8 @@ kernel:
   id: kernel-1
 
 spring:
-  redis:
-    host: localhost
-    port: 6379
   datasource:
-    url: jdbc:mysql://127.0.0.1:3307/agentdb
+    url: jdbc:mysql://127.0.0.1:3306/agentdb
     username: agent
     password: agentpass
   jpa:
@@ -33,11 +30,6 @@ eureka:
     lease-renewal-interval-in-seconds: 10
     lease-expiration-duration-in-seconds: 30
 
-aws:
-  bedrock:
-    region: us-east-1   # Change to your actual Bedrock region
-    credentials:
-      accessKeyId: YOUR_AWS_ACCESS_KEY_ID
-      secretAccessKey: YOUR_AWS_SECRET_ACCESS_KEY
+
 server:
   port: 8080
