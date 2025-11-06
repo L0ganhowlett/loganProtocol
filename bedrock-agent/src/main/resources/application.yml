@@ -1,6 +1,6 @@
 
 kernel:
-  base-url: http://172.31.11.231:8080
+  base-url: http://localhost:8080
 spring:
   application:
     name: bedrock-agent
@@ -15,7 +15,7 @@ eureka:
     prefer-ip-address: true
     lease-renewal-interval-in-seconds: 10
     lease-expiration-duration-in-seconds: 30
-    ip-address: 172.31.11.231
+    ip-address: YOUR_IP
 
 aws:
   bedrock:

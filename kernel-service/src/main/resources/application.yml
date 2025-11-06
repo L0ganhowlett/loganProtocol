@@ -5,7 +5,7 @@ spring:
   datasource:
     url: jdbc:mysql://127.0.0.1:3306/agentdb
     username: agent
-    password: Highflyer@123
+    password: agentPass
   jpa:
     hibernate:
       ddl-auto: validate
@@ -29,15 +29,9 @@ eureka:
     prefer-ip-address: true
     lease-renewal-interval-in-seconds: 10
     lease-expiration-duration-in-seconds: 30
-    ip-address: 172.31.11.231
+    ip-address: YOUR_EUREKA
     non-secure-port: ${server.port}
     instance-id: ${spring.application.name}:${server.port}
 
-aws:
-  bedrock:
-    region: us-east-1   #Change to your actual Bedrock region
-    credentials:
-      accessKeyId: YOUR_AWS_ACCESS_KEY_ID
-      secretAccessKey: YOUR_AWS_SECRET_ACCESS_KEY
 server:
   port: 8080
