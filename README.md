@@ -2,7 +2,7 @@
 # **Project ORION – The Agentic Orchestration Engine**  
 *An AI-driven protocol for autonomous agent collaboration and orchestration*
 
-[![License](https://img.shields.io/github/license/L0ganhowlett/Project-ORION)](LICENSE)
+
 [![AWS](https://img.shields.io/badge/Built_on-AWS_Bedrock-orange)](#)
 [![Java](https://img.shields.io/badge/Backend-Java_21_&_SpringBoot-blue)](#)
 [![LLM](https://img.shields.io/badge/LLM-Nova_Bedrock-green)](#)
@@ -135,7 +135,7 @@ Enables **autonomous CI/CD orchestration** using agents for build, monitoring, a
 ##  **Maintainer**
 
 **Adwait Laud ([@L0ganhowlett](https://github.com/L0ganhowlett))**  
-*AI Systems Engineer • AWS Agentic Protocols Researcher*
+*AI Systems Engineer • Agentic Protocols Researcher*
 
 ---
 
