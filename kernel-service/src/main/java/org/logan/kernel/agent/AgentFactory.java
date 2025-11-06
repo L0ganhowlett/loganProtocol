@@ -1,6 +1,7 @@
 package org.logan.kernel.agent;
 
 import org.logan.kernel.persistence.AgentPersistenceService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
@@ -15,6 +16,9 @@ import java.util.UUID;
 
 @Component
 public class AgentFactory {
+
+    @Value("${kernel.agent-base-path:/home/ec2-user/Orion/}")
+    private String agentBasePath;
 
     private final AgentRegistry registry;
     private final AgentPersistenceService persistence;
@@ -58,11 +62,16 @@ public class AgentFactory {
         int port = findFreePort();
         String assignedEndpoint = (endpoint != null) ? endpoint : "http://localhost:" + port;
 
+        String jarPath = agentBasePath + "bedrock-agent-1.0-SNAPSHOT.jar";
         ProcessBuilder pb = new ProcessBuilder(
-                "java", "-jar",
-                "/home/ec2-user/Orion/bedrock-agent-1.0-SNAPSHOT.jar",
+                "java",
+                "-Dspring.application.name=bedrock-agent",
+                "-Dweb.allowed-origins=http://localhost:5173",
+                "-Daws.bedrock.region=ap-south-1",
+                "-jar", jarPath,
                 "--server.port=" + port
         );
+
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         pb.redirectError(ProcessBuilder.Redirect.INHERIT);
 

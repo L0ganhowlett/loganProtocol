@@ -24,6 +24,9 @@ aws:
       accessKeyId: YOUR_KEY
       secretAccessKey: YOUR_SECRET_KEY
     api-key: YOUR_API_KEY
+
+web:
+  allowed-origins: YOUR_FRONTEND_URL
 #logging:
 #  level:
 #    org.springframework.web.client.RestTemplate: TRACE

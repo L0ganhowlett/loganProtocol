@@ -1,5 +1,7 @@
 kernel:
   id: kernel-1
+  agent-base-path: YOUR_LOCATION_OF_BEDROCK_AGENT_JAR #Name jar like this "bedrock-agent-1.0-SNAPSHOT.jar"
+
 
 spring:
   datasource:
@@ -35,3 +37,7 @@ eureka:
 
 server:
   port: 8080
+
+web:
+  allowed-origins: YOUR_FRONTEND
+
