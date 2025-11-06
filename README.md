@@ -1,5 +1,5 @@
 
-# 🌌 **Project ORION – The Agentic Orchestration Engine**  
+# **Project ORION – The Agentic Orchestration Engine**  
 *An AI-driven protocol for autonomous agent collaboration and orchestration*
 
 [![License](https://img.shields.io/github/license/L0ganhowlett/Project-ORION)](LICENSE)
@@ -10,38 +10,38 @@
 
 ---
 
-## 🌠 **Inspiration**
+## **Inspiration**
 
 > *“What if AI agents could collaborate intelligently, like a digital team — planning, reasoning, and acting together?”*
 
 Modern LLMs can *think* but not *coordinate*. Traditional APIs work in silos — unable to reason or collaborate.  
 **Project ORION** bridges this gap with an **agentic orchestration protocol**, where AI agents **plan, reason, and act collaboratively**, pausing when human context is needed and resuming autonomously.
 
-🧠 **LLM Orchestrator = Brain**  
-💪 **Agents = Muscles**  
-⚡ **Kernel = Nervous System**
+ **LLM Orchestrator = Brain**  
+ **Agents = Muscles**  
+ **Kernel = Nervous System**
 
 ---
 
-## ⚙️ **Overview**
+##  **Overview**
 
 **ORION** is an **Agentic AI Protocol** that transforms microservices into autonomous reasoning agents.  
 Each agent can register, discover, and communicate dynamically through a central **Kernel**, forming a self-governing **multi-agent ecosystem** powered by **AWS Bedrock**.
 
 ---
 
-## 🧩 **Key Features**
+##  **Key Features**
 
-- 🪶 **Custom AI Agent Registration** — Convert any REST/ML service into an agent  
-- 🧭 **Automatic Orchestration** — Dynamic reasoning and action planning via Bedrock  
-- 🔁 **Human-in-the-loop** — Intelligent pauses for user input, automatic resume  
-- ⚡ **Event-driven Kernel** — Asynchronous orchestration with `CompletableFuture`  
-- 🔍 **Real-time Visualization** — Live orchestration dashboard via SSE  
-- 💾 **Persistent State** — Session memory with JSON-based resumption  
+-  **Custom AI Agent Registration** — Convert any REST/ML service into an agent  
+-  **Automatic Orchestration** — Dynamic reasoning and action planning via Bedrock  
+-  **Human-in-the-loop** — Intelligent pauses for user input, automatic resume  
+-  **Event-driven Kernel** — Asynchronous orchestration with `CompletableFuture`  
+-  **Real-time Visualization** — Live orchestration dashboard via SSE  
+-  **Persistent State** — Session memory with JSON-based resumption  
 
 ---
 
-## 🏗️ **Architecture Overview**
+## ️ **Architecture Overview**
 
 ![ORION Architecture](https://raw.githubusercontent.com/L0ganhowlett/loganProtocol/master/Architecture.png?update=2)
 
@@ -57,7 +57,7 @@ Each agent can register, discover, and communicate dynamically through a central
 
 ---
 
-## ☁️ **AWS Infrastructure**
+## ️ **AWS Infrastructure**
 
 | Component | Purpose | AWS Service |
 |------------|----------|--------------|
@@ -71,7 +71,7 @@ Each agent can register, discover, and communicate dynamically through a central
 
 ---
 
-## 🔄 **Data Flow**
+##  **Data Flow**
 
 1. **Startup:** Agents self-register with Eureka → Kernel initializes orchestration.  
 2. **User Request:** User triggers a workflow via UI → Kernel delegates to Orchestrator.  
@@ -81,7 +81,7 @@ Each agent can register, discover, and communicate dynamically through a central
 
 ---
 
-## 🧠 **Example: MSME Invoice Workflow**
+##  **Example: MSME Invoice Workflow**
 
 **Prompt:**  
 > “Create a new invoice for vendor *‘Zenith Retailers’* with amount ₹45,000 and notify the vendor.”
@@ -90,30 +90,30 @@ Each agent can register, discover, and communicate dynamically through a central
 
 | Agent | Action | Tool |
 |--------|---------|------|
-| 🧾 Invoice Agent | Creates new invoice | `Create_Invoice_Tool(vendor, amount)` |
-| 📬 Notification Agent | Notifies vendor | `Send_Notification_Tool(vendor, message)` |
+|  Invoice Agent | Creates new invoice | `Create_Invoice_Tool(vendor, amount)` |
+|  Notification Agent | Notifies vendor | `Send_Notification_Tool(vendor, message)` |
 
-➡️ Outcome:  
+Outcome:  
 Invoice `INV-1042` created, validated, and vendor notified — autonomously.
 
 ---
 
-## 🚀 **Jenkins Agentic Deployer Protocol**
+##  **Jenkins Agentic Deployer Protocol**
 
 Enables **autonomous CI/CD orchestration** using agents for build, monitoring, and deployment.
 
-| Agent | Tool Example | Description |
-|-------|---------------|-------------|
-| 🧱 Jenkins Agent | `Trigger_Job_Tool(jobName, parameters)` | Starts a Jenkins build |
-| 👁️ Build Monitor Agent | `Monitor_Build_Tool(jobName)` | Tracks build progress |
-| 🚢 Deployment Agent | `Deploy_Build_Tool(jobName, env)` | Deploys to staging/production |
-| 📣 Notification Agent | `Send_Build_Notification_Tool(jobName, status, message)` | Sends alerts on success/failure |
+| Agent                 | Tool Example | Description |
+|-----------------------|---------------|-------------|
+| Jenkins Agent         | `Trigger_Job_Tool(jobName, parameters)` | Starts a Jenkins build |
+| ️ Build Monitor Agent | `Monitor_Build_Tool(jobName)` | Tracks build progress |
+| Deployment Agent      | `Deploy_Build_Tool(jobName, env)` | Deploys to staging/production |
+| Notification Agent    | `Send_Build_Notification_Tool(jobName, status, message)` | Sends alerts on success/failure |
 
-➡️ Result: Fully automated CI/CD pipelines orchestrated by reasoning agents.
+ Result: Fully automated CI/CD pipelines orchestrated by reasoning agents.
 
 ---
 
-## 🌐 **Live Demos**
+##  **Live Demos**
 
 | UI | URL | Credentials |
 |----|-----|--------------|
@@ -123,7 +123,7 @@ Enables **autonomous CI/CD orchestration** using agents for build, monitoring, a
 
 ---
 
-## 🧭 **Core Philosophy**
+##  **Core Philosophy**
 
 > “You don’t just automate workflows —  
 > you build *thinking systems* that evolve with your goals.”
@@ -132,13 +132,13 @@ Enables **autonomous CI/CD orchestration** using agents for build, monitoring, a
 
 ---
 
-## 🧑‍💻 **Maintainer**
+##  **Maintainer**
 
 **Adwait Laud ([@L0ganhowlett](https://github.com/L0ganhowlett))**  
 *AI Systems Engineer • AWS Agentic Protocols Researcher*
 
 ---
 
-## 🪐 **License**
+##  **License**
 
 This project is licensed under the [MIT License](LICENSE).
