@@ -1,9 +1,10 @@
-
 kernel:
   base-url: http://localhost:8080
+
 spring:
   application:
-    name: bedrock-agent
+    name: nvidia-agent
+
 eureka:
   client:
     register-with-eureka: true
@@ -17,16 +18,11 @@ eureka:
     lease-expiration-duration-in-seconds: 30
     ip-address: YOUR_IP
 
-aws:
-  bedrock:
-    region: ap-south-1
-    credentials:
-      accessKeyId: YOUR_KEY
-      secretAccessKey: YOUR_SECRET_KEY
-    api-key: YOUR_API_KEY
+nvidia:
+  api:
+    base-url: https://integrate.api.nvidia.com/v1
+    model: nvidia/llama-3.1-nemotron-nano-8b-v1
+    api-key: ${NVIDIA_API_KEY}
 
 web:
-  allowed-origins: YOUR_FRONTEND_URL
-#logging:
-#  level:
-#    org.springframework.web.client.RestTemplate: TRACE
+  allowed-origins: http://ec2-13-233-77-128.ap-south-1.compute.amazonaws.com:5173
