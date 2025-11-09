@@ -20,6 +20,9 @@ public class AgentFactory {
     @Value("${kernel.agent-base-path:/home/ec2-user/Orion/}")
     private String agentBasePath;
 
+    @Value("${eureka.instance.ip-address}")
+    private String instanceIp;
+
     private final AgentRegistry registry;
     private final AgentPersistenceService persistence;
 
@@ -60,15 +63,14 @@ public class AgentFactory {
     // ✅ Spawn new Spawner agent
     public Agent createSpawnerAgent(String id, String endpoint) throws Exception {
         int port = findFreePort();
-        String assignedEndpoint = (endpoint != null) ? endpoint : "http://localhost:" + port;
+        String assignedEndpoint = "http://" + instanceIp + ":" + port; // ✅ FIXED
 
-        String jarPath = agentBasePath + "bedrock-agent-1.0-SNAPSHOT.jar";
         ProcessBuilder pb = new ProcessBuilder(
                 "java",
                 "-Dspring.application.name=bedrock-agent",
                 "-Dweb.allowed-origins=http://localhost:5173",
                 "-Daws.bedrock.region=ap-south-1",
-                "-jar", jarPath,
+                "-jar", agentBasePath,
                 "--server.port=" + port
         );
 
@@ -86,17 +88,17 @@ public class AgentFactory {
     // ✅ Spawn new Bedrock agent
     public Agent createBedrockAgent(String id, String endpoint) throws Exception {
         int port = findFreePort();
-        String assignedEndpoint = (endpoint != null) ? endpoint : "http://172.31.11.231:" + port;
+        String assignedEndpoint = "http://" + instanceIp + ":" + port; // ✅ FIXED
 
-        int debugPort = findFreePort(); // utility to pick a free port
+        int debugPort = findFreePort();
         ProcessBuilder pb = new ProcessBuilder(
                 "java",
-                "-jar", "/home/ec2-user/Orion/bedrock-agent-1.0-SNAPSHOT.jar",
+                "-jar", agentBasePath,
                 "--server.port=" + port
         );
         System.out.println("🐞 Debug port for " + id + " = " + debugPort);
-        pb.directory(new File(System.getProperty("user.dir"))); // ✅ ensure relative paths ok
-        pb.inheritIO(); // ✅ stream logs into kernel console
+        pb.directory(new File(System.getProperty("user.dir")));
+        pb.inheritIO();
 
         Process process = pb.start();
         BedrockAgent agent = new BedrockAgent(id, assignedEndpoint, process);
