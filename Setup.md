@@ -181,7 +181,32 @@ Check the Eureka dashboard — you should see entries like:
 
 ---
 
-### **7. Verify Orchestration Flow**
+### **7. Deploy Usecase Services**
+
+```bash
+cd msme-billing-service
+java -jar target/msme-billing-service-1.0.0.jar
+```
+
+```bash
+cd jenkins-service
+java -jar target/jenkins-service1.0.0.jar
+```
+
+
+
+Check the Eureka dashboard — you should see entries like:
+
+| Application | Status | Port |
+|--------------|---------|------|
+| DISCOVERY-SERVICE | ✅ UP | 8761 |
+| KERNEL-SERVICE | ✅ UP | 8080 |
+| MSME-BILLING-SERVICE | ✅ UP | 8090 |
+| JENKINS-SERVICE | ✅ UP | 8091 |
+| BEDROCK-AGENT | ✅ UP | dynamic |
+---
+
+### **8. Verify Orchestration Flow**
 
 Once **Kernel** and **Discovery** are up, test orchestration using cURL:
 
@@ -200,21 +225,6 @@ Expected response:
 
 ---
 
-### **8. Validate System Health**
-
-Visit **Eureka Console** → [http://localhost:8761](http://localhost:8761)
-
-You should see something like:
-
-| Application | Status | Port |
-|--------------|---------|------|
-| KERNEL-SERVICE | ✅ UP | 8080 |
-| BEDROCK-AGENT-1 | ✅ UP | 51421 |
-| BEDROCK-AGENT-2 | ✅ UP | 51422 |
-
-This confirms successful orchestration.
-
----
 
 ### **9. Stopping the Services**
 
